@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SoundCloud Desktop</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-backdrop"></div>
+
+    <div class="window-shell">
+      <aside class="sidebar">
+        <div class="sidebar-top">
+          <div class="brand-block">
+            <div class="brand-mark">SC</div>
+            <div>
+              <div class="brand-title">SOUNDCLOUD</div>
+              <div class="brand-subtitle">Desktop Client</div>
+            </div>
+          </div>
+
+          <div class="sidebar-group">
+            <div class="sidebar-label">Навигация</div>
+            <button class="nav-button active" data-page="home">
+              <span>Главная</span>
+            </button>
+            <button class="nav-button" data-page="search">
+              <span>Поиск</span>
+            </button>
+            <button class="nav-button" data-page="library">
+              <span>Библиотека</span>
+            </button>
+          </div>
+
+          <div class="sidebar-group">
+            <div class="sidebar-label">Коллекция</div>
+            <button class="nav-button nav-subtle" data-library-shortcut="favorites">
+              <span>Liked Tracks</span>
+            </button>
+            <button class="nav-button nav-subtle" data-library-shortcut="playlists">
+              <span>Плейлисты</span>
+            </button>
+          </div>
+
+          <div class="sidebar-group">
+            <div class="sidebar-label">Ваши плейлисты</div>
+            <div id="sidebarPlaylistList" class="sidebar-playlists"></div>
+          </div>
+        </div>
+
+        <div class="sidebar-bottom">
+          <div class="sidebar-stat-grid">
+            <div class="sidebar-stat-card">
+              <strong id="sidebarFavoritesCount">0</strong>
+              <span>Избранное</span>
+            </div>
+            <div class="sidebar-stat-card">
+              <strong id="sidebarRecentCount">0</strong>
+              <span>Недавние</span>
+            </div>
+            <div class="sidebar-stat-card wide">
+              <strong id="sidebarPlaylistCount">0</strong>
+              <span>Плейлисты</span>
+            </div>
+          </div>
+          <div class="sidebar-footer">Electron x SoundCloud</div>
+        </div>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <div id="pageEyebrow" class="page-eyebrow">SoundCloud Desktop</div>
+            <h1 id="pageTitle" class="page-title">Главная</h1>
+            <p id="pageSubtitle" class="page-subtitle">Ритм, который хочется вернуть в один клик.</p>
+          </div>
+
+          <div class="topbar-actions">
+            <label class="topbar-search">
+              <span>Поиск</span>
+              <input id="globalSearchInput" type="text" placeholder="Поиск в SoundCloud" />
+            </label>
+            <button id="topbarSearchBtn" class="icon-chip accent">Найти</button>
+            <button id="topbarCreatePlaylistBtn" class="icon-chip">Новый плейлист</button>
+          </div>
+        </header>
+
+        <div class="page-scroll">
+          <section class="page active" id="page-home">
+            <div class="hero-panel">
+              <div class="hero-copy">
+                <div class="hero-kicker">Твой desktop-поток</div>
+                <h2>Темный, быстрый и аккуратный клиент для SoundCloud.</h2>
+                <p>
+                  Быстрый поиск, избранное, локальные плейлисты и нижний плеер в
+                  одном цельном интерфейсе без лишнего визуального шума.
+                </p>
+                <div class="hero-actions">
+                  <button id="heroSearchBtn" class="primary-btn">Открыть поиск</button>
+                  <button id="heroPlaylistBtn" class="secondary-btn">Создать плейлист</button>
+                </div>
+              </div>
+
+              <div class="hero-stats">
+                <div class="hero-stat-card">
+                  <span>Недавние</span>
+                  <strong id="heroRecentCount">0</strong>
+                  <small>треков под рукой</small>
+                </div>
+                <div class="hero-stat-card">
+                  <span>Избранное</span>
+                  <strong id="heroFavoritesCount">0</strong>
+                  <small>сохранено в коллекции</small>
+                </div>
+                <div class="hero-stat-card">
+                  <span>Плейлисты</span>
+                  <strong id="heroPlaylistCount">0</strong>
+                  <small>локальных подборок</small>
+                </div>
+              </div>
+            </div>
+
+            <div class="section-head">
+              <div>
+                <h3>Слушали недавно</h3>
+                <p>Быстрый доступ к тому, что уже зацепило.</p>
+              </div>
+              <button id="refreshRecentBtn" class="text-btn">Обновить</button>
+            </div>
+            <div id="homeRecentGrid" class="cover-grid"></div>
+
+            <div class="dashboard-grid home-grid">
+              <section class="glass-panel">
+                <div class="panel-head">
+                  <div>
+                    <h3>Для вас</h3>
+                    <p>Подборка из избранного и последних прослушиваний.</p>
+                  </div>
+                </div>
+                <div id="homeMixGrid" class="cover-grid compact"></div>
+              </section>
+
+              <section class="glass-panel">
+                <div class="panel-head">
+                  <div>
+                    <h3>Быстрый старт</h3>
+                    <p>Очередь, подсказки и короткие сценарии без переходов.</p>
+                  </div>
+                </div>
+                <div class="chip-row">
+                  <button class="filter-chip" data-suggestion="deep house">deep house</button>
+                  <button class="filter-chip" data-suggestion="synthwave">synthwave</button>
+                  <button class="filter-chip" data-suggestion="drum and bass">drum and bass</button>
+                  <button class="filter-chip" data-suggestion="ambient">ambient</button>
+                </div>
+                <div id="homeQueueList" class="track-list dense"></div>
+              </section>
+            </div>
+          </section>
+
+          <section class="page" id="page-search">
+            <div class="search-stage glass-panel">
+              <div class="search-form">
+                <label class="search-input-wrap">
+                  <span>Запрос</span>
+                  <input
+                    id="searchInput"
+                    type="text"
+                    placeholder="Треки, плейлисты, альбомы и исполнители"
+                  />
+                </label>
+                <div class="search-form-actions">
+                  <button id="searchBtn" class="primary-btn">Найти</button>
+                  <button id="openUrlBtn" class="secondary-btn">Открыть URL</button>
+                </div>
+              </div>
+
+              <div class="chip-row tab-row">
+                <button class="filter-chip active" data-search-tab="tracks">Треки</button>
+                <button class="filter-chip" data-search-tab="playlists">Плейлисты</button>
+                <button class="filter-chip" data-search-tab="albums">Альбомы</button>
+                <button class="filter-chip" data-search-tab="artists">Исполнители</button>
+              </div>
+
+              <div id="searchInfo" class="info-line">Введите запрос и нажмите Enter.</div>
+            </div>
+
+            <div class="dashboard-grid">
+              <section class="glass-panel">
+                <div id="searchTracks" class="track-list search-panel active"></div>
+                <div id="searchPlaylists" class="track-list search-panel"></div>
+                <div id="searchAlbums" class="track-list search-panel"></div>
+                <div id="searchArtists" class="track-list search-panel"></div>
+
+                <div class="panel-footer">
+                  <button id="loadMoreBtn" class="secondary-btn" disabled>Показать еще 10</button>
+                </div>
+              </section>
+
+              <aside class="glass-panel focus-panel" data-detail-panel="search">
+                <div class="focus-cover" data-field="cover">
+                  <span data-field="cover-initials">SC</span>
+                </div>
+                <div class="focus-type" data-field="type">Ничего не выбрано</div>
+                <h3 data-field="title">Выберите трек, плейлист или артиста</h3>
+                <div class="focus-meta" data-field="meta"></div>
+                <p class="focus-text" data-field="text">
+                  Подробности о выбранном элементе появятся здесь. Отсюда же можно
+                  сразу запустить трек, сохранить его или открыть в браузере.
+                </p>
+
+                <div class="detail-actions">
+                  <button class="primary-btn" data-action="play-selected" data-role="play-action">Слушать</button>
+                  <button class="primary-btn hidden" data-action="open-selected-collection" data-role="collection-action">Открыть подборку</button>
+                  <button class="secondary-btn" data-action="toggle-selected-favorite" data-role="favorite-action">В избранное</button>
+                  <button class="secondary-btn" data-action="add-selected-to-playlist" data-role="playlist-action">В плейлист</button>
+                  <button class="secondary-btn" data-action="download-selected" data-role="download-action">Скачать</button>
+                  <button class="secondary-btn" data-action="open-selected-browser" data-role="browser-action">В браузере</button>
+                </div>
+              </aside>
+            </div>
+          </section>
+
+          <section class="page" id="page-library">
+            <div class="section-head">
+              <div>
+                <h3>Ваша библиотека</h3>
+                <p>Избранные треки, локальные плейлисты и все, что стоит не потерять.</p>
+              </div>
+              <div class="inline-actions">
+                <button id="createPlaylistBtn" class="primary-btn">Создать плейлист</button>
+                <button id="refreshLibraryBtn" class="secondary-btn">Обновить</button>
+              </div>
+            </div>
+
+            <div class="dashboard-grid library-grid">
+              <section class="glass-panel library-rail">
+                <div class="chip-row tab-row compact">
+                  <button class="filter-chip active" data-library-tab="favorites">Избранное</button>
+                  <button class="filter-chip" data-library-tab="playlists">Плейлисты</button>
+                </div>
+
+                <div id="favoritesList" class="track-list library-panel active"></div>
+                <div id="playlistsList" class="playlist-stack library-panel"></div>
+              </section>
+
+              <section class="glass-panel library-detail">
+                <div class="library-detail-top" data-detail-panel="library">
+                  <div class="focus-cover large" data-field="cover">
+                    <span data-field="cover-initials">SC</span>
+                  </div>
+                  <div class="library-detail-copy">
+                    <div class="focus-type" data-field="type">Ничего не выбрано</div>
+                    <h3 data-field="title">Выберите трек или плейлист</h3>
+                    <div class="focus-meta" data-field="meta"></div>
+                    <p class="focus-text" data-field="text">
+                      Здесь можно быстро запускать треки, добавлять их в коллекцию
+                      и управлять локальными плейлистами.
+                    </p>
+                  </div>
+                </div>
+
+                <div class="detail-actions">
+                  <button class="primary-btn" data-action="play-selected" data-role="play-action">Слушать</button>
+                  <button class="primary-btn hidden" data-action="open-selected-collection" data-role="collection-action">Открыть подборку</button>
+                  <button class="secondary-btn" data-action="toggle-selected-favorite" data-role="favorite-action">В избранное</button>
+                  <button class="secondary-btn" data-action="add-selected-to-playlist" data-role="playlist-action">В плейлист</button>
+                  <button class="secondary-btn" data-action="download-selected" data-role="download-action">Скачать</button>
+                  <button class="secondary-btn" data-action="open-selected-browser" data-role="browser-action">В браузере</button>
+                </div>
+
+                <div id="playlistControls" class="detail-actions hidden">
+                  <button id="playPlaylistBtn" class="primary-btn">Играть весь плейлист</button>
+                  <button id="deletePlaylistBtn" class="secondary-btn danger">Удалить плейлист</button>
+                </div>
+
+                <div class="panel-head spacing-top">
+                  <div>
+                    <h3>Содержимое</h3>
+                    <p>Треки внутри выбранного локального плейлиста.</p>
+                  </div>
+                </div>
+                <div id="playlistTracksList" class="track-list"></div>
+              </section>
+            </div>
+          </section>
+        </div>
+
+        <footer class="player-bar">
+          <div class="now-playing">
+            <div class="player-cover" id="playerCover">
+              <img id="coverImage" class="cover-image hidden" alt="cover" />
+              <span id="playerCoverFallback">SC</span>
+            </div>
+            <div class="now-playing-copy">
+              <div id="playerTitle" class="player-title">Ничего не играет</div>
+              <div id="playerArtist" class="player-artist">Выберите трек для запуска</div>
+              <div id="playerSource" class="player-source">Источник: ожидание</div>
+            </div>
+          </div>
+
+          <div class="player-center">
+            <div class="player-buttons">
+              <button id="shuffleBtn" class="player-icon">↭</button>
+              <button id="prevBtn" class="player-icon">⏮</button>
+              <button id="playPauseBtn" class="play-btn">▶</button>
+              <button id="nextBtn" class="player-icon">⏭</button>
+              <button id="repeatBtn" class="player-icon">↺</button>
+            </div>
+            <div class="progress-row">
+              <span id="currentTime">00:00</span>
+              <input id="progressSlider" type="range" min="0" max="100" value="0" />
+              <span id="totalTime">00:00</span>
+            </div>
+          </div>
+
+          <div class="player-right">
+            <button id="muteBtn" class="player-icon small">🔊</button>
+            <input id="volumeSlider" type="range" min="0" max="100" value="70" />
+          </div>
+        </footer>
+      </section>
+    </div>
+
+    <div id="toastContainer" class="toast-container"></div>
+
+    <div id="modalOverlay" class="modal-overlay hidden">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <div class="modal-head">
+          <div>
+            <div class="modal-kicker">SoundCloud Desktop</div>
+            <h3 id="modalTitle">Действие</h3>
+          </div>
+          <button id="modalCloseBtn" class="modal-close">✕</button>
+        </div>
+        <p id="modalDescription" class="modal-description"></p>
+        <div id="modalBody" class="modal-body"></div>
+        <div class="modal-actions">
+          <button id="modalCancelBtn" class="secondary-btn">Отмена</button>
+          <button id="modalConfirmBtn" class="primary-btn">Подтвердить</button>
+        </div>
+      </div>
+    </div>
+
+    <audio id="audioPlayer" preload="auto"></audio>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

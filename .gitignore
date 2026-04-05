@@ -1,0 +1,11 @@
+node_modules/
+dist/
+out/
+*.log
+.env
+.env.*
+*.db
+tmp/
+temp/
+.cache/
+*.zip

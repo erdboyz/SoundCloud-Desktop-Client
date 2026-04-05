@@ -1,0 +1,23 @@
+{
+  "name": "soundcloud-electron-client",
+  "version": "1.0.0",
+  "description": "Desktop SoundCloud client built with Electron",
+  "main": "src/main/main.js",
+  "author": "OpenAI",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron ."
+  },
+  "dependencies": {
+    "axios": "^1.8.4",
+    "better-sqlite3": "^11.8.1",
+    "electron-store": "^10.0.1",
+    "sanitize-filename": "^1.6.3",
+    "yt-dlp-wrap": "^2.3.12"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
+    "electron": "^35.1.5"
+  }
+}

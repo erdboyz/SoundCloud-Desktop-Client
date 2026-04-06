@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('soundcloudAPI', {
   searchAll: (query, limit) => ipcRenderer.invoke('sc:search-all', { query, limit }),
   searchTracks: (query, limit) => ipcRenderer.invoke('sc:search-tracks', { query, limit }),
   resolveUrl: (url) => ipcRenderer.invoke('sc:resolve-url', { url }),
+  getCollection: (collectionId) => ipcRenderer.invoke('sc:get-collection', { collectionId }),
+  getArtistProfile: (artistId, trackLimit, collectionLimit) => ipcRenderer.invoke('sc:get-artist-profile', { artistId, trackLimit, collectionLimit }),
   getStream: (trackUrl) => ipcRenderer.invoke('sc:get-stream', { trackUrl }),
   preparePlayback: (trackUrl, title) => ipcRenderer.invoke('sc:prepare-playback', { trackUrl, title }),
   downloadTrack: (trackUrl, title) => ipcRenderer.invoke('sc:download-track', { trackUrl, title }),

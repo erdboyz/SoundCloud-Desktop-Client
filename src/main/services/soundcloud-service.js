@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const axios = require('axios');
 const sanitize = require('sanitize-filename');
 const { pathToFileURL } = require('url');
+const { app } = require('electron');
 const YTDlpWrap = require('yt-dlp-wrap').default;
 
 const HEADERS = {
@@ -16,6 +17,9 @@ const HEADERS = {
   Origin: 'https://soundcloud.com',
 };
 
+const API_BASE_URL = 'https://api.soundcloud.com';
+const OAUTH_URL = 'https://secure.soundcloud.com/oauth/token';
+const TOKEN_REFRESH_MARGIN_MS = 60 * 1000;
 const PROXY_HEADER_WHITELIST = [
   'content-type',
   'content-length',
@@ -32,11 +36,234 @@ class SoundCloudService {
     this.cacheDir = path.join(os.tmpdir(), 'soundcloud-electron-client');
     this.playbackCacheDir = path.join(this.cacheDir, 'playback');
     this.streamTokens = new Map();
+    this.playlistDetailsCache = new Map();
+    this.artistProfileCache = new Map();
     this.streamServer = null;
     this.streamServerPort = null;
     this.streamServerPromise = null;
+    this.apiCredentials = this.loadApiCredentials();
+    this.tokenCachePath = path.join(app?.getPath?.('userData') || process.cwd(), 'soundcloud-app-token.json');
+    this.tokenState = this.loadTokenState();
+    this.tokenRequestPromise = null;
+
     fs.mkdirSync(this.cacheDir, { recursive: true });
     fs.mkdirSync(this.playbackCacheDir, { recursive: true });
+  }
+
+  normalizeCredentialValue(value) {
+    const normalized = String(value || '').trim();
+    if (!normalized) return '';
+    if (/^(YOUR_|your_)/.test(normalized)) return '';
+    return normalized;
+  }
+
+  mergeCredentials(base = {}, next = {}) {
+    return {
+      clientId: this.normalizeCredentialValue(next.clientId || next.client_id) || base.clientId || '',
+      clientSecret: this.normalizeCredentialValue(next.clientSecret || next.client_secret) || base.clientSecret || '',
+      redirectUri: this.normalizeCredentialValue(next.redirectUri || next.redirect_uri) || base.redirectUri || '',
+    };
+  }
+
+  parseEnvFile(filePath) {
+    if (!fs.existsSync(filePath)) return {};
+    const env = {};
+    const content = fs.readFileSync(filePath, 'utf8');
+    content.split(/\r?\n/).forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return;
+      const separatorIndex = trimmed.indexOf('=');
+      if (separatorIndex <= 0) return;
+      const key = trimmed.slice(0, separatorIndex).trim();
+      const rawValue = trimmed.slice(separatorIndex + 1).trim();
+      env[key] = rawValue.replace(/^["']|["']$/g, '');
+    });
+    return env;
+  }
+
+  loadApiCredentials() {
+    let credentials = this.mergeCredentials({}, {
+      clientId: process.env.SOUNDCLOUD_CLIENT_ID,
+      clientSecret: process.env.SOUNDCLOUD_CLIENT_SECRET,
+      redirectUri: process.env.SOUNDCLOUD_REDIRECT_URI,
+    });
+
+    const cwd = process.cwd();
+    const appPath = app?.getAppPath?.() || cwd;
+    const envCandidates = [
+      path.join(cwd, '.env'),
+      path.join(cwd, '.env.local'),
+      path.join(appPath, '.env'),
+      path.join(appPath, '.env.local'),
+    ];
+
+    envCandidates.forEach((filePath) => {
+      try {
+        const parsed = this.parseEnvFile(filePath);
+        credentials = this.mergeCredentials(credentials, {
+          clientId: parsed.SOUNDCLOUD_CLIENT_ID,
+          clientSecret: parsed.SOUNDCLOUD_CLIENT_SECRET,
+          redirectUri: parsed.SOUNDCLOUD_REDIRECT_URI,
+        });
+      } catch (error) {
+        console.warn(`Failed to read env file ${filePath}:`, error.message);
+      }
+    });
+
+    const configCandidates = [
+      path.join(cwd, 'soundcloud.config.json'),
+      path.join(cwd, 'soundcloud.config.local.json'),
+      path.join(cwd, 'soundcloud.config.example.json'),
+      path.join(appPath, 'soundcloud.config.json'),
+      path.join(appPath, 'soundcloud.config.local.json'),
+      path.join(appPath, 'soundcloud.config.example.json'),
+    ];
+
+    configCandidates.forEach((filePath) => {
+      try {
+        if (!fs.existsSync(filePath)) return;
+        const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        credentials = this.mergeCredentials(credentials, raw);
+      } catch (error) {
+        console.warn(`Failed to read SoundCloud config from ${filePath}:`, error.message);
+      }
+    });
+
+    return credentials;
+  }
+
+  hasOfficialApiConfig() {
+    return Boolean(this.apiCredentials.clientId && this.apiCredentials.clientSecret);
+  }
+
+  loadTokenState() {
+    try {
+      if (!fs.existsSync(this.tokenCachePath)) return null;
+      const parsed = JSON.parse(fs.readFileSync(this.tokenCachePath, 'utf8'));
+      if (!parsed?.accessToken) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  saveTokenState() {
+    try {
+      if (!this.tokenState) {
+        if (fs.existsSync(this.tokenCachePath)) {
+          fs.unlinkSync(this.tokenCachePath);
+        }
+        return;
+      }
+      fs.writeFileSync(this.tokenCachePath, JSON.stringify(this.tokenState, null, 2), 'utf8');
+    } catch (error) {
+      console.warn('Failed to persist SoundCloud token cache:', error.message);
+    }
+  }
+
+  isTokenValid() {
+    return Boolean(
+      this.tokenState?.accessToken &&
+      Number(this.tokenState.expiresAt || 0) > Date.now() + TOKEN_REFRESH_MARGIN_MS
+    );
+  }
+
+  buildBasicAuthHeader() {
+    const auth = `${this.apiCredentials.clientId}:${this.apiCredentials.clientSecret}`;
+    return `Basic ${Buffer.from(auth).toString('base64')}`;
+  }
+
+  async requestClientCredentialsToken() {
+    const params = new URLSearchParams();
+    params.set('grant_type', 'client_credentials');
+
+    const response = await axios.post(OAUTH_URL, params.toString(), {
+      headers: {
+        accept: 'application/json; charset=utf-8',
+        'content-type': 'application/x-www-form-urlencoded',
+        Authorization: this.buildBasicAuthHeader(),
+      },
+      timeout: 20000,
+    });
+
+    return response.data;
+  }
+
+  async refreshAccessToken(refreshToken) {
+    const params = new URLSearchParams();
+    params.set('grant_type', 'refresh_token');
+    params.set('client_id', this.apiCredentials.clientId);
+    params.set('client_secret', this.apiCredentials.clientSecret);
+    params.set('refresh_token', refreshToken);
+
+    const response = await axios.post(OAUTH_URL, params.toString(), {
+      headers: {
+        accept: 'application/json; charset=utf-8',
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      timeout: 20000,
+    });
+
+    return response.data;
+  }
+
+  applyTokenPayload(payload) {
+    this.tokenState = {
+      accessToken: payload.access_token,
+      refreshToken: payload.refresh_token || '',
+      expiresAt: Date.now() + (Number(payload.expires_in || 3600) * 1000),
+      scope: payload.scope || '',
+    };
+    this.saveTokenState();
+  }
+
+  async ensureApiToken() {
+    if (!this.hasOfficialApiConfig()) {
+      throw new Error('Не настроены SOUNDCLOUD_CLIENT_ID и SOUNDCLOUD_CLIENT_SECRET');
+    }
+
+    if (this.isTokenValid()) {
+      return this.tokenState.accessToken;
+    }
+
+    if (this.tokenRequestPromise) {
+      return this.tokenRequestPromise;
+    }
+
+    this.tokenRequestPromise = (async () => {
+      try {
+        let payload;
+        if (this.tokenState?.refreshToken) {
+          try {
+            payload = await this.refreshAccessToken(this.tokenState.refreshToken);
+          } catch (error) {
+            payload = await this.requestClientCredentialsToken();
+          }
+        } else {
+          payload = await this.requestClientCredentialsToken();
+        }
+
+        this.applyTokenPayload(payload);
+        return this.tokenState.accessToken;
+      } finally {
+        this.tokenRequestPromise = null;
+      }
+    })();
+
+    return this.tokenRequestPromise;
+  }
+
+  async apiGet(endpoint, params = {}) {
+    const token = await this.ensureApiToken();
+    const response = await axios.get(`${API_BASE_URL}${endpoint}`, {
+      params,
+      headers: {
+        accept: 'application/json; charset=utf-8',
+        Authorization: `OAuth ${token}`,
+      },
+      timeout: 20000,
+    });
+    return response.data;
   }
 
   async execYtDlp(args) {
@@ -44,40 +271,320 @@ class SoundCloudService {
     return output;
   }
 
-  async extractInfo(urlOrSearch, extraArgs = []) {
+  async extractInfo(urlOrSearch, extraArgs = [], options = {}) {
     const args = [
       '--dump-single-json',
       '--no-warnings',
-      '--no-playlist',
       '--skip-download',
       '--add-header', `User-Agent:${HEADERS['User-Agent']}`,
       '--add-header', `Accept-Language:${HEADERS['Accept-Language']}`,
-      ...extraArgs,
-      urlOrSearch,
     ];
+
+    if (!options.allowPlaylist) {
+      args.push('--no-playlist');
+    }
+
+    args.push(...extraArgs, urlOrSearch);
     const output = await this.execYtDlp(args);
     return JSON.parse(output);
   }
 
+  normalizeDuration(value) {
+    const duration = Number(value || 0);
+    if (duration > 10000) {
+      return Math.round(duration / 1000);
+    }
+    return duration;
+  }
+
   normalizeTrack(info) {
+    const artwork = info.thumbnail || info.artwork_url || info.user?.avatar_url || '';
     return {
       id: String(info.id || ''),
       title: info.title || 'Без названия',
-      uploader: info.uploader || info.artist || 'Неизвестный артист',
-      duration: Number(info.duration || 0),
-      thumbnail: info.thumbnail || '',
-      webpage_url: info.webpage_url || info.original_url || '',
+      uploader:
+        info.uploader ||
+        info.artist ||
+        info.user?.username ||
+        info.publisher_metadata?.artist ||
+        'Неизвестный артист',
+      duration: this.normalizeDuration(info.duration || info.full_duration),
+      thumbnail: artwork ? artwork.replace('-large', '-t500x500') : '',
+      webpage_url: info.webpage_url || info.permalink_url || info.original_url || '',
       stream_url: info.url || '',
       description: info.description || '',
       genre: info.genre || '',
-      view_count: Number(info.view_count || 0),
-      like_count: Number(info.like_count || 0),
+      view_count: Number(info.view_count || info.playback_count || 0),
+      like_count: Number(info.like_count || info.favoritings_count || info.likes_count || 0),
       kind: 'track',
       raw: info,
     };
   }
 
-  async searchTracks(query, limit = 10) {
+  normalizePlaylist(info, options = {}) {
+    const artwork = info.thumbnail || info.artwork_url || info.user?.avatar_url || '';
+    const kind = options.kind || this.inferCollectionKind(info);
+    return {
+      id: String(info.id || ''),
+      title: info.title || 'Без названия',
+      uploader: info.user?.username || info.user?.full_name || 'SoundCloud',
+      webpage_url: info.webpage_url || info.permalink_url || '',
+      thumbnail: artwork ? artwork.replace('-large', '-t500x500') : '',
+      track_count: Number(info.track_count || (Array.isArray(info.tracks) ? info.tracks.length : 0)),
+      description: info.description || '',
+      kind,
+      raw: info,
+    };
+  }
+
+  normalizeArtist(info) {
+    const artwork = info.thumbnail || info.avatar_url || '';
+    return {
+      id: String(info.id || ''),
+      title: info.username || info.full_name || 'Без названия',
+      uploader: info.full_name || info.username || 'SoundCloud',
+      webpage_url: info.webpage_url || info.permalink_url || '',
+      thumbnail: artwork ? artwork.replace('-large', '-t500x500') : '',
+      followers: Number(info.followers_count || 0),
+      description: info.description || '',
+      kind: 'artist',
+      raw: info,
+    };
+  }
+
+  isAlbumPlaylist(info) {
+    return Boolean(info?.is_album || info?.set_type === 'album' || info?.display_date_type === 'album');
+  }
+
+  inferCollectionKind(info) {
+    if (this.isAlbumPlaylist(info)) {
+      return 'album';
+    }
+    if (this.looksLikeAlbum(info)) {
+      return 'album';
+    }
+    return 'playlist';
+  }
+
+  looksLikeAlbum(info) {
+    const tracks = Array.isArray(info?.tracks) ? info.tracks.filter(Boolean) : [];
+    if (tracks.length < 2) {
+      return false;
+    }
+
+    const title = String(info?.title || '').trim();
+    if (/\b(selections?|mix|workout|radio|favorites?|favourites?|chart|best of|top \d+)\b/i.test(title)) {
+      return false;
+    }
+
+    const ownerId = String(info?.user?.id || '');
+    const ownedTracks = ownerId
+      ? tracks.filter((track) => String(track?.user?.id || '') === ownerId).length
+      : 0;
+    const ownedRatio = ownedTracks / tracks.length;
+
+    const hasPlaylistReleaseDate = Boolean(info?.release_year || info?.release_month || info?.release_day);
+    const tracksWithReleaseDate = tracks.filter((track) => (
+      track?.release_year ||
+      track?.release_month ||
+      track?.release_day
+    )).length;
+    const hasTrackReleaseSignal = tracksWithReleaseDate >= Math.max(2, Math.ceil(tracks.length * 0.6));
+    const hasTitleSignal = /\b(album|lp|ep)\b/i.test(title);
+
+    return ownedRatio >= 0.8 && (hasPlaylistReleaseDate || hasTrackReleaseSignal || hasTitleSignal);
+  }
+
+  normalizeTrackList(entries = []) {
+    const seen = new Set();
+    const normalized = [];
+
+    entries.forEach((entry) => {
+      if (!entry) return;
+      const track = this.normalizeTrack(entry);
+      const key = track.id || track.webpage_url || `${track.title}:${track.uploader}`;
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      normalized.push(track);
+    });
+
+    return normalized;
+  }
+
+  unwrapCollection(data) {
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data?.collection)) return data.collection;
+    return [];
+  }
+
+  buildSearchVariants(query) {
+    const trimmed = String(query || '').trim();
+    if (!trimmed) return [];
+
+    const parts = trimmed
+      .split(/\s+/)
+      .map((part) => part.trim())
+      .filter((part) => part.length >= 3);
+
+    const variants = [trimmed];
+    [...new Set(parts)].forEach((part) => variants.push(part));
+    return [...new Set(variants)];
+  }
+
+  async searchApiWithVariants(endpoint, query, limit, normalizer) {
+    const variants = this.buildSearchVariants(query);
+    const found = [];
+    const seenIds = new Set();
+
+    for (const variant of variants) {
+      const data = await this.apiGet(endpoint, {
+        q: variant,
+        limit: Math.min(Math.max(Number(limit || 10), 1), 50),
+      });
+
+      this.unwrapCollection(data).forEach((item) => {
+        const normalized = normalizer.call(this, item);
+        if (!normalized?.id || seenIds.has(normalized.id)) return;
+        seenIds.add(normalized.id);
+        found.push(normalized);
+      });
+
+      if (found.length >= limit) {
+        break;
+      }
+    }
+
+    return found.slice(0, limit);
+  }
+
+  async searchTracksViaApi(query, limit = 10) {
+    return this.searchApiWithVariants('/tracks', query, limit, this.normalizeTrack);
+  }
+
+  async searchPlaylistsViaApi(query, limit = 10) {
+    return this.searchApiWithVariants('/playlists', query, limit, this.normalizePlaylist);
+  }
+
+  async searchArtistsViaApi(query, limit = 10) {
+    return this.searchApiWithVariants('/users', query, limit, this.normalizeArtist);
+  }
+
+  async searchSetsViaApi(query, limit = 10) {
+    const candidateLimit = Math.min(Math.max(Number(limit || 10) * 4, 12), 40);
+    const candidates = await this.searchApiWithVariants('/playlists', query, candidateLimit, this.normalizePlaylist);
+    const resolved = await Promise.all(
+      candidates.map(async (item) => {
+        try {
+          return await this.getCollectionById(item.id);
+        } catch {
+          return item;
+        }
+      })
+    );
+
+    const playlists = [];
+    const albums = [];
+    const seen = new Set();
+
+    resolved.forEach((item) => {
+      if (!item?.id || seen.has(item.id)) return;
+      seen.add(item.id);
+      if (item.kind === 'album') {
+        albums.push(item);
+      } else {
+        playlists.push(item);
+      }
+    });
+
+    return {
+      playlists: playlists.slice(0, limit),
+      albums: albums.slice(0, limit),
+    };
+  }
+
+  async getCollectionById(collectionId) {
+    const cacheKey = String(collectionId || '').trim();
+    if (!cacheKey) {
+      throw new Error('Не удалось определить плейлист для открытия');
+    }
+
+    if (this.playlistDetailsCache.has(cacheKey)) {
+      return this.playlistDetailsCache.get(cacheKey);
+    }
+
+    const data = await this.apiGet(`/playlists/${encodeURIComponent(cacheKey)}`);
+    const tracks = this.normalizeTrackList(data.tracks || []);
+    const payload = {
+      ...this.normalizePlaylist(data),
+      track_count: Number(data.track_count || tracks.length || 0),
+      tracks,
+    };
+
+    this.playlistDetailsCache.set(cacheKey, payload);
+    return payload;
+  }
+
+  async getArtistProfile(artistId, options = {}) {
+    const trackLimit = Math.min(Math.max(Number(options.trackLimit || 25), 1), 100);
+    const collectionLimit = Math.min(Math.max(Number(options.collectionLimit || 25), 1), 50);
+    const normalizedArtistId = String(artistId || '').trim();
+    const cacheKey = `${normalizedArtistId}:${trackLimit}:${collectionLimit}`;
+
+    if (!normalizedArtistId) {
+      throw new Error('Не удалось определить артиста для открытия');
+    }
+
+    if (this.artistProfileCache.has(cacheKey)) {
+      return this.artistProfileCache.get(cacheKey);
+    }
+
+    const [user, trackData, playlistData] = await Promise.all([
+      this.apiGet(`/users/${encodeURIComponent(normalizedArtistId)}`),
+      this.apiGet(`/users/${encodeURIComponent(normalizedArtistId)}/tracks`, { limit: trackLimit }),
+      this.apiGet(`/users/${encodeURIComponent(normalizedArtistId)}/playlists`, { limit: collectionLimit }),
+    ]);
+
+    const tracks = this.normalizeTrackList(this.unwrapCollection(trackData));
+    const rawCollections = this.unwrapCollection(playlistData)
+      .map((item) => this.normalizePlaylist(item))
+      .filter((item) => item?.id);
+
+    const detailedCollections = await Promise.all(
+      rawCollections.map(async (item) => {
+        try {
+          return await this.getCollectionById(item.id);
+        } catch {
+          return item;
+        }
+      })
+    );
+
+    const playlists = [];
+    const albums = [];
+    const seen = new Set();
+
+    detailedCollections.forEach((item) => {
+      if (!item?.id || seen.has(item.id)) return;
+      seen.add(item.id);
+      if (item.kind === 'album') {
+        albums.push(item);
+      } else {
+        playlists.push(item);
+      }
+    });
+
+    const payload = {
+      ...this.normalizeArtist(user),
+      tracks: tracks.slice(0, trackLimit),
+      playlists: playlists.slice(0, collectionLimit),
+      albums: albums.slice(0, collectionLimit),
+    };
+
+    this.artistProfileCache.set(cacheKey, payload);
+    return payload;
+  }
+
+  async legacySearchTracks(query, limit = 10) {
     const data = await this.extractInfo(`scsearch${limit}:${query}`, ['--default-search', 'scsearch']);
     const entries = Array.isArray(data.entries) ? data.entries : [];
     return entries
@@ -163,9 +670,9 @@ class SoundCloudService {
     return items;
   }
 
-  async searchAll(query, limit = 10) {
+  async legacySearchAll(query, limit = 10) {
     const [tracks, setsHtml, peopleHtml] = await Promise.all([
-      this.searchTracks(query, limit),
+      this.legacySearchTracks(query, limit),
       this.fetchHtml(`https://soundcloud.com/search/sets?q=${encodeURIComponent(query)}`).catch(() => ''),
       this.fetchHtml(`https://soundcloud.com/search/people?q=${encodeURIComponent(query)}`).catch(() => ''),
     ]);
@@ -176,19 +683,48 @@ class SoundCloudService {
     return { tracks, playlists, albums, artists };
   }
 
-  async resolveUrl(url) {
-    const data = await this.extractInfo(url, ['--flat-playlist', 'never']);
-    if (data._type === 'playlist' || Array.isArray(data.entries)) {
-      const entries = (data.entries || [])
-        .filter((entry) => entry && entry._type !== 'url')
-        .map((entry) => this.normalizeTrack(entry));
+  async searchTracks(query, limit = 10) {
+    if (this.hasOfficialApiConfig()) {
+      return this.searchTracksViaApi(query, limit);
+    }
+    return this.legacySearchTracks(query, limit);
+  }
+
+  async searchAll(query, limit = 10) {
+    if (this.hasOfficialApiConfig()) {
+      const [tracks, setResults, artists] = await Promise.all([
+        this.searchTracksViaApi(query, limit),
+        this.searchSetsViaApi(query, limit),
+        this.searchArtistsViaApi(query, limit),
+      ]);
+
       return {
-        kind: 'playlist',
+        tracks,
+        playlists: setResults.playlists,
+        albums: setResults.albums,
+        artists,
+      };
+    }
+
+    return this.legacySearchAll(query, limit);
+  }
+
+  async resolveUrl(url) {
+    const data = await this.extractInfo(url, [], { allowPlaylist: true });
+    if (data._type === 'playlist' || Array.isArray(data.entries)) {
+      const entries = this.normalizeTrackList(
+        (data.entries || []).filter((entry) => entry && entry._type !== 'url')
+      );
+      const normalized = this.normalizePlaylist({
+        ...data,
+        track_count: Number(data.track_count || entries.length || 0),
+      });
+      return {
+        ...normalized,
         title: data.title || 'Плейлист',
-        uploader: data.uploader || '',
-        webpage_url: data.webpage_url || url,
-        thumbnail: data.thumbnail || '',
+        webpage_url: normalized.webpage_url || url,
         entries,
+        tracks: entries,
       };
     }
 

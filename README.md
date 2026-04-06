@@ -1,6 +1,6 @@
 # SoundCloud Desktop на Electron
 
-Полноценный desktop-клиент для SoundCloud на Electron.js.
+Desktop-клиент для SoundCloud на Electron.js.
 
 ## Что уже есть
 
@@ -11,7 +11,7 @@
 - локальные плейлисты;
 - история прослушивания;
 - скачивание трека через `yt-dlp`;
-- улучшенный UI по сравнению с монолитным PyQt-вариантом.
+- desktop UI на чистом Electron.
 
 ## Стек
 
@@ -26,11 +26,45 @@
 npm install
 ```
 
+## Настройка SoundCloud API
+
+Поиск по плейлистам, альбомам и артистам теперь может работать через официальный SoundCloud API без авторизации пользователя.
+
+Нужны только:
+
+- `client_id`
+- `client_secret`
+
+`redirect_uri` для этого режима не нужен. Он пригодится только если когда-нибудь понадобится login через аккаунт SoundCloud.
+
+Есть два способа передать ключи:
+
+1. Через переменные окружения:
+
+```powershell
+$env:SOUNDCLOUD_CLIENT_ID="your_client_id"
+$env:SOUNDCLOUD_CLIENT_SECRET="your_client_secret"
+npm start
+```
+
+2. Через локальный файл `soundcloud.config.json` в корне проекта:
+
+```json
+{
+  "clientId": "your_client_id",
+  "clientSecret": "your_client_secret"
+}
+```
+
+Для удобства рядом лежит шаблон: `soundcloud.config.example.json`.
+
+Если ключи не настроены, клиент откатится на старый способ поиска.
+
 ## Важно
 
-Для работы стриминга и скачивания нужен установленный `yt-dlp` в системе.
+Для стриминга и скачивания нужен установленный `yt-dlp` в системе.
 
-Проверь так:
+Проверка:
 
 ```bash
 yt-dlp --version
@@ -58,11 +92,3 @@ src/
     styles.css
     renderer.js
 ```
-
-## Что стоит сделать дальше
-
-- добавить toast-уведомления вместо `alert/prompt`;
-- сделать drag-and-drop сортировку локальных плейлистов;
-- добавить кеширование обложек и результатов поиска;
-- перевести UI на React/Vue при желании;
-- собрать `.exe` через `electron-builder`.

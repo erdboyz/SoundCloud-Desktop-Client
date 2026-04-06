@@ -522,7 +522,7 @@ function detailText(item) {
 
 function updateActionVisibility(item) {
   const showTrackControls = Boolean(item && isTrack(item));
-  const showCollectionControls = Boolean(item && (item.kind === "playlist" || item.kind === "album"));
+  const showCollectionControls = Boolean(item && (item.kind === "playlist" || item.kind === "album" || item.kind === "artist"));
   const showBrowserControl = Boolean(item?.webpage_url);
 
   document.querySelectorAll('[data-role="play-action"]').forEach((button) => {
@@ -530,6 +530,16 @@ function updateActionVisibility(item) {
   });
   document.querySelectorAll('[data-role="collection-action"]').forEach((button) => {
     button.classList.toggle("hidden", !showCollectionControls);
+    if (!showCollectionControls) return;
+    if (item.kind === "artist") {
+      button.textContent = "Открыть профиль";
+      return;
+    }
+    if (item.kind === "album") {
+      button.textContent = "Открыть альбом";
+      return;
+    }
+    button.textContent = "Открыть подборку";
   });
   document.querySelectorAll('[data-role="favorite-action"]').forEach((button) => {
     button.classList.toggle("hidden", !showTrackControls);
@@ -933,7 +943,7 @@ function renderSearchResults() {
   renderCollectionRows(el.searchArtists, state.searchResults.artists, {
     emptyText: "Исполнители не найдены.",
     primaryLabel: "Профиль",
-    onPrimary: openInBrowser,
+    onPrimary: openArtistProfile,
     onSecondary: openInBrowser,
   });
 }
@@ -1066,7 +1076,7 @@ async function removeTrackFromSelectedPlaylist(item) {
 }
 
 function queueTrack(item) {
-  if (!item?.webpage_url) {
+  if (!item?.id && !item?.webpage_url) {
     pushToast("Этот элемент нельзя добавить в очередь", "info");
     return;
   }
@@ -1206,6 +1216,51 @@ async function loadMoreSearch() {
   await executeSearch(false);
 }
 
+function showRemoteCollection(collection, infoText) {
+  const tab = collection.kind === "album" ? "albums" : "tracks";
+  state.searchResults = {
+    tracks: collection.tracks || collection.entries || [],
+    playlists: collection.kind === "playlist" ? [collection] : [],
+    albums: collection.kind === "album" ? [collection] : [],
+    artists: [],
+  };
+  state.selectedPlaylist = null;
+  state.selectedItem = collection;
+  setPage("search");
+  setSearchTab(tab);
+  el.searchInfo.textContent = infoText;
+  renderHome();
+  renderSearchResults();
+  renderLibraryPanels();
+  renderDetailPanels();
+}
+
+function showArtistProfile(profile, infoText) {
+  const nextTab = profile.tracks?.length
+    ? "tracks"
+    : profile.albums?.length
+      ? "albums"
+      : profile.playlists?.length
+        ? "playlists"
+        : "artists";
+
+  state.searchResults = {
+    tracks: profile.tracks || [],
+    playlists: profile.playlists || [],
+    albums: profile.albums || [],
+    artists: [profile],
+  };
+  state.selectedPlaylist = null;
+  state.selectedItem = profile;
+  setPage("search");
+  setSearchTab(nextTab);
+  el.searchInfo.textContent = infoText;
+  renderHome();
+  renderSearchResults();
+  renderLibraryPanels();
+  renderDetailPanels();
+}
+
 async function resolveUrlFlow() {
   const url = await promptForText({
     title: "Открыть ссылку",
@@ -1219,27 +1274,12 @@ async function resolveUrlFlow() {
   try {
     const response = await window.soundcloudAPI.resolveUrl(url);
     const data = unwrapResponse(response, "Не удалось разобрать ссылку");
-    setPage("search");
-
-    if (data.kind === "playlist") {
-      state.searchResults = {
-        tracks: data.entries || [],
-        playlists: [],
-        albums: [],
-        artists: [],
-      };
-      setSearchTab("tracks");
-      renderSearchResults();
-      el.searchInfo.textContent = `Открыт плейлист: ${data.title}`;
-      selectItem({
-        title: data.title,
-        uploader: data.uploader,
-        thumbnail: data.thumbnail,
-        webpage_url: data.webpage_url,
-        track_count: (data.entries || []).length,
-        kind: "playlist",
-      });
+    if (data.kind === "playlist" || data.kind === "album") {
+      const label = data.kind === "album" ? "Открыт альбом" : "Открыт плейлист";
+      showRemoteCollection(data, `${label}: ${data.title}`);
+      el.searchInfo.textContent = `${label}: ${data.title}`;
     } else if (data.track) {
+      setPage("search");
       state.searchResults = {
         tracks: [data.track],
         playlists: [],
@@ -1256,30 +1296,55 @@ async function resolveUrlFlow() {
   }
 }
 
+async function openArtistProfile(item) {
+  if (!item?.id) {
+    if (item?.webpage_url) {
+      await openInBrowser(item);
+      return;
+    }
+    pushToast("РЈ СЌС‚РѕРіРѕ Р°СЂС‚РёСЃС‚Р° РЅРµС‚ РёРґРµРЅС‚РёС„РёРєР°С‚РѕСЂР°", "info");
+    return;
+  }
+
+  try {
+    const response = await window.soundcloudAPI.getArtistProfile(item.id, 25, 25);
+    const profile = unwrapResponse(response, "РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РєСЂС‹С‚СЊ РїСЂРѕС„РёР»СЊ Р°СЂС‚РёСЃС‚Р°");
+    showArtistProfile(profile, `РџСЂРѕС„РёР»СЊ Р°СЂС‚РёСЃС‚Р°: ${profile.title}`);
+    pushToast(`РћС‚РєСЂС‹С‚ РїСЂРѕС„РёР»СЊ В«${profile.title}В»`, "success");
+  } catch (error) {
+    pushToast(normalizeError(error, "РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РєСЂС‹С‚СЊ РїСЂРѕС„РёР»СЊ Р°СЂС‚РёСЃС‚Р°"), "error");
+  }
+}
+
 async function openCollection(item) {
-  if (!item?.webpage_url) {
+  if (!item?.id && !item?.webpage_url) {
     pushToast("У этого элемента нет ссылки", "info");
     return;
   }
 
   try {
+    if (item?.kind === "artist") {
+      await openArtistProfile(item);
+      return;
+    }
+
+    if (item?.id) {
+      const response = await window.soundcloudAPI.getCollection(item.id);
+      const data = unwrapResponse(response, "РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РєСЂС‹С‚СЊ РїРѕРґР±РѕСЂРєСѓ");
+      const label = data.kind === "album" ? "Открыт альбом" : "Открыта подборка";
+      showRemoteCollection(data, `${label}: ${data.title}`);
+      pushToast(`${label}: ${data.title}`, "success");
+      return;
+    }
+
     const response = await window.soundcloudAPI.resolveUrl(item.webpage_url);
     const data = unwrapResponse(response, "Не удалось открыть подборку");
 
-    if (data.kind === "playlist") {
-      state.searchResults.tracks = data.entries || [];
-      setPage("search");
-      setSearchTab("tracks");
-      el.searchInfo.textContent = `Открыта подборка: ${data.title}`;
-      selectItem({
-        ...item,
-        title: data.title,
-        uploader: data.uploader,
-        thumbnail: data.thumbnail || item.thumbnail,
-        track_count: (data.entries || []).length,
-      });
-      renderSearchResults();
-      pushToast(`Открыта подборка «${data.title}»`, "success");
+    if (data.kind === "playlist" || data.kind === "album") {
+      const label = data.kind === "album" ? "Открыт альбом" : "Открыта подборка";
+      showRemoteCollection(data, `${label}: ${data.title}`);
+      el.searchInfo.textContent = `${label}: ${data.title}`;
+      pushToast(`${label}: ${data.title}`, "success");
     }
   } catch (error) {
     pushToast(normalizeError(error, "Не удалось открыть подборку"), "error");

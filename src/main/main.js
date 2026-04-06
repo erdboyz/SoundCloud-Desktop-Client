@@ -68,6 +68,22 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('sc:get-collection', async (_, { collectionId }) => {
+    try {
+      return ok(await sc.getCollectionById(collectionId));
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+
+  ipcMain.handle('sc:get-artist-profile', async (_, { artistId, trackLimit, collectionLimit }) => {
+    try {
+      return ok(await sc.getArtistProfile(artistId, { trackLimit, collectionLimit }));
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+
   ipcMain.handle('sc:get-stream', async (_, { trackUrl }) => {
     try {
       return ok(await sc.getStream(trackUrl));

@@ -83,7 +83,6 @@
               <input id="globalSearchInput" type="text" placeholder="Поиск в SoundCloud" />
             </label>
             <button id="topbarSearchBtn" class="icon-chip accent">Найти</button>
-            <button id="topbarCreatePlaylistBtn" class="icon-chip">Новый плейлист</button>
           </div>
         </header>
 
@@ -99,7 +98,7 @@
                 </p>
                 <div class="hero-actions">
                   <button id="heroSearchBtn" class="primary-btn">Открыть поиск</button>
-                  <button id="heroPlaylistBtn" class="secondary-btn">Создать плейлист</button>
+                  <button id="heroPlaylistBtn" class="secondary-btn">Открыть плейлисты</button>
                 </div>
               </div>
 
@@ -161,7 +160,7 @@
           </section>
 
           <section class="page" id="page-search">
-            <div class="search-stage glass-panel">
+            <div id="searchStage" class="search-stage glass-panel">
               <div class="search-form">
                 <label class="search-input-wrap">
                   <span>Запрос</span>
@@ -187,7 +186,8 @@
               <div id="searchInfo" class="info-line">Введите запрос и нажмите Enter.</div>
             </div>
 
-            <div class="dashboard-grid">
+            <div id="searchResultsView" class="search-view">
+              <div class="dashboard-grid">
               <section class="glass-panel">
                 <div id="searchTracks" class="track-list search-panel active"></div>
                 <div id="searchPlaylists" class="track-list search-panel"></div>
@@ -221,6 +221,50 @@
                 </div>
               </aside>
             </div>
+            </div>
+
+            <div id="searchEntityView" class="search-entity hidden">
+              <section class="glass-panel entity-hero-panel">
+                <button id="entityBackBtn" class="text-btn entity-back-btn">← Назад к поиску</button>
+
+                <div class="entity-hero-grid">
+                  <div id="entityCover" class="focus-cover entity-cover">
+                    <span id="entityCoverFallback">SC</span>
+                  </div>
+
+                  <div class="entity-copy">
+                    <div id="entityType" class="focus-type">Плейлист</div>
+                    <h2 id="entityTitle" class="entity-title">Название</h2>
+                    <div id="entityMeta" class="focus-meta entity-meta"></div>
+                    <p id="entityText" class="focus-text entity-text"></p>
+
+                    <div class="detail-actions entity-actions">
+                      <button id="entityPrimaryBtn" class="primary-btn">Слушать</button>
+                      <button id="entityBrowserBtn" class="secondary-btn">В браузере</button>
+                    </div>
+
+                    <div id="entityStatsGrid" class="entity-stats"></div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="glass-panel entity-content-panel">
+                <div id="entityTabs" class="chip-row tab-row compact hidden">
+                  <button class="filter-chip active" data-entity-tab="tracks">Треки</button>
+                  <button class="filter-chip" data-entity-tab="albums">Альбомы</button>
+                  <button class="filter-chip" data-entity-tab="playlists">Плейлисты</button>
+                </div>
+
+                <div class="panel-head">
+                  <div>
+                    <h3 id="entityContentTitle">Треки</h3>
+                    <p id="entityContentText">Содержимое открытого раздела.</p>
+                  </div>
+                </div>
+
+                <div id="entityContentList" class="track-list"></div>
+              </section>
+            </div>
           </section>
 
           <section class="page" id="page-library">
@@ -242,12 +286,22 @@
                   <button class="filter-chip" data-library-tab="playlists">Плейлисты</button>
                 </div>
 
+                <div id="libraryModeCard" class="library-mode-card">
+                  <div>
+                    <div class="focus-type" id="libraryModeKicker">Избранное</div>
+                    <h3 class="library-mode-title" id="libraryModeTitle">Сохраненные треки</h3>
+                    <p class="focus-text library-mode-text" id="libraryModeText">
+                      Здесь живут треки, которые вы отметили и захотели вернуть позже.
+                    </p>
+                  </div>
+                </div>
+
                 <div id="favoritesList" class="track-list library-panel active"></div>
                 <div id="playlistsList" class="playlist-stack library-panel"></div>
               </section>
 
-              <section class="glass-panel library-detail">
-                <div class="library-detail-top" data-detail-panel="library">
+              <section class="glass-panel library-detail" data-detail-panel="library">
+                <div class="library-detail-top">
                   <div class="focus-cover large" data-field="cover">
                     <span data-field="cover-initials">SC</span>
                   </div>
@@ -272,6 +326,7 @@
                 </div>
 
                 <div id="playlistControls" class="detail-actions hidden">
+                  <button id="detailCreatePlaylistBtn" class="primary-btn">Создать плейлист</button>
                   <button id="playPlaylistBtn" class="primary-btn">Играть весь плейлист</button>
                   <button id="deletePlaylistBtn" class="secondary-btn danger">Удалить плейлист</button>
                 </div>

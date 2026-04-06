@@ -343,7 +343,7 @@
           </section>
         </div>
 
-        <footer class="player-bar">
+        <footer id="playerBar" class="player-bar">
           <div class="now-playing">
             <div class="player-cover" id="playerCover">
               <img id="coverImage" class="cover-image hidden" alt="cover" />
@@ -372,10 +372,80 @@
           </div>
 
           <div class="player-right">
+            <button id="playerFavoriteBtn" class="player-icon small" type="button" title="Добавить в избранное">♥</button>
+            <button id="playerAddToPlaylistBtn" class="player-icon small" type="button" title="Добавить в плейлист">+</button>
+            <button id="queueBtn" class="player-icon small" type="button" title="Открыть очередь">☰</button>
             <button id="muteBtn" class="player-icon small">🔊</button>
             <input id="volumeSlider" type="range" min="0" max="100" value="70" />
           </div>
         </footer>
+
+        <section id="playerFullscreen" class="player-fullscreen hidden">
+          <div class="player-fullscreen-shell">
+            <div class="player-fullscreen-head">
+              <div>
+                <div class="player-fullscreen-kicker">Сейчас играет</div>
+                <div id="fullscreenSource" class="player-fullscreen-source">Источник: ожидание</div>
+              </div>
+              <button id="collapsePlayerBtn" class="secondary-btn" type="button">Свернуть</button>
+            </div>
+
+            <div class="player-fullscreen-stage">
+              <div class="player-fullscreen-art">
+                <img id="fullscreenCoverImage" class="cover-image hidden" alt="cover" />
+                <span id="fullscreenCoverFallback">SC</span>
+              </div>
+
+              <div class="player-fullscreen-copy">
+                <h2 id="fullscreenTitle" class="player-fullscreen-title">Ничего не играет</h2>
+                <button id="fullscreenArtist" class="player-artist-link player-artist-link-large" type="button">Выберите трек для запуска</button>
+                <p id="fullscreenTrackMeta" class="player-fullscreen-meta">Запустите трек, чтобы открыть полноэкранный плеер, очередь и быстрые действия.</p>
+
+                <div class="player-fullscreen-actions">
+                  <button id="fullscreenFavoriteBtn" class="secondary-btn player-action-pill" type="button">В избранное</button>
+                  <button id="fullscreenAddToPlaylistBtn" class="secondary-btn player-action-pill" type="button">В плейлист</button>
+                  <button id="fullscreenQueueBtn" class="secondary-btn player-action-pill" type="button">Очередь</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="player-fullscreen-controls">
+              <div class="player-buttons player-buttons-large">
+                <button id="fullscreenShuffleBtn" class="player-icon" type="button" title="Перемешать очередь">↭</button>
+                <button id="fullscreenPrevBtn" class="player-icon" type="button" title="Предыдущий трек">⏮</button>
+                <button id="fullscreenPlayPauseBtn" class="play-btn" type="button" title="Воспроизведение / пауза">▶</button>
+                <button id="fullscreenNextBtn" class="player-icon" type="button" title="Следующий трек">⏭</button>
+                <button id="fullscreenRepeatBtn" class="player-icon" type="button" title="Повтор">↺</button>
+              </div>
+
+              <div class="progress-row fullscreen-progress-row">
+                <span id="fullscreenCurrentTime">00:00</span>
+                <input id="fullscreenProgressSlider" type="range" min="0" max="100" value="0" />
+                <span id="fullscreenTotalTime">00:00</span>
+              </div>
+
+              <div class="player-fullscreen-volume">
+                <button id="fullscreenMuteBtn" class="player-icon small" type="button" title="Звук">🔊</button>
+                <input id="fullscreenVolumeSlider" type="range" min="0" max="100" value="70" />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside id="playerQueuePanel" class="player-queue-panel hidden">
+          <div class="player-queue-head">
+            <div>
+              <div class="player-queue-kicker">Очередь</div>
+              <h3>Next up</h3>
+              <p id="playerQueueSummary" class="player-queue-summary">Очередь появится после запуска первого трека.</p>
+            </div>
+            <div class="player-queue-head-actions">
+              <button id="clearQueueBtn" class="text-btn" type="button">Очистить</button>
+              <button id="closeQueueBtn" class="player-icon small" type="button" title="Закрыть очередь">✕</button>
+            </div>
+          </div>
+          <div id="playerQueueList" class="player-queue-list"></div>
+        </aside>
       </section>
     </div>
 

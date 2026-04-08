@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Desktop SoundCloud client built with Electron",
   "main": "src/main/main.js",
-  "author": "OpenAI",
+  "author": "erdboyz",
   "license": "MIT",
   "scripts": {
     "start": "electron .",

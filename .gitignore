@@ -4,9 +4,6 @@ out/
 *.log
 .env
 .env.*
-soundcloud.config.json
-soundcloud.config.example.json
-soundcloud-app-token.json
 *.db
 tmp/
 temp/

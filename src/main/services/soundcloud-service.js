@@ -42,6 +42,8 @@ class SoundCloudService {
     this.streamServerPort = null;
     this.streamServerPromise = null;
     this.apiCredentials = this.loadApiCredentials();
+    this.settingsPath = path.join(app?.getPath?.('userData') || process.cwd(), 'soundcloud-client-settings.json');
+    this.clientSettings = this.loadClientSettings();
     this.tokenCachePath = path.join(app?.getPath?.('userData') || process.cwd(), 'soundcloud-app-token.json');
     this.tokenState = this.loadTokenState();
     this.tokenRequestPromise = null;
@@ -134,6 +136,109 @@ class SoundCloudService {
 
   hasOfficialApiConfig() {
     return Boolean(this.apiCredentials.clientId && this.apiCredentials.clientSecret);
+  }
+
+  normalizeBackendUrl(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    const withProtocol = /^https?:\/\//i.test(raw)
+      ? raw
+      : (/^(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?/i.test(raw) ? `http://${raw}` : `https://${raw}`);
+    return withProtocol.replace(/\/+$/, '');
+  }
+
+  normalizeClientSettings(settings = {}) {
+    return {
+      backendUrl: this.normalizeBackendUrl(settings.backendUrl || settings.backend_url),
+      accessKey: this.normalizeCredentialValue(settings.accessKey || settings.access_key || settings.backendAccessKey),
+    };
+  }
+
+  loadClientSettings() {
+    try {
+      if (!fs.existsSync(this.settingsPath)) {
+        return this.normalizeClientSettings({});
+      }
+      return this.normalizeClientSettings(JSON.parse(fs.readFileSync(this.settingsPath, 'utf8')));
+    } catch (error) {
+      console.warn('Failed to read client settings:', error.message);
+      return this.normalizeClientSettings({});
+    }
+  }
+
+  getClientSettings() {
+    return { ...this.clientSettings };
+  }
+
+  saveClientSettings(settings = {}) {
+    this.clientSettings = this.normalizeClientSettings(settings);
+    try {
+      fs.mkdirSync(path.dirname(this.settingsPath), { recursive: true });
+      fs.writeFileSync(this.settingsPath, JSON.stringify(this.clientSettings, null, 2), 'utf8');
+    } catch (error) {
+      console.warn('Failed to persist client settings:', error.message);
+      throw new Error('Не удалось сохранить настройки клиента');
+    }
+
+    this.playlistDetailsCache.clear();
+    this.artistProfileCache.clear();
+    return this.getClientSettings();
+  }
+
+  hasProxyConfig() {
+    return Boolean(this.clientSettings?.backendUrl);
+  }
+
+  buildProxyUrl(endpoint, params = {}) {
+    if (!this.hasProxyConfig()) {
+      throw new Error('Backend URL не настроен');
+    }
+
+    const base = new URL(this.clientSettings.backendUrl);
+    const basePath = base.pathname.replace(/\/+$/, '').replace(/\/$/, '');
+    let endpointPath = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+
+    if (basePath.endsWith('/api') && endpointPath.startsWith('/api/')) {
+      endpointPath = endpointPath.slice('/api'.length);
+    }
+
+    const url = new URL(`${basePath}${endpointPath}`, base.origin);
+    Object.entries(params).forEach(([key, value]) => {
+      if (typeof value === 'undefined' || value === null || value === '') return;
+      url.searchParams.set(key, String(value));
+    });
+    return url.toString();
+  }
+
+  async proxyGet(endpoint, params = {}) {
+    const headers = { accept: 'application/json; charset=utf-8' };
+    if (this.clientSettings.accessKey) {
+      headers['X-App-Key'] = this.clientSettings.accessKey;
+    }
+
+    try {
+      const response = await axios.get(this.buildProxyUrl(endpoint, params), {
+        headers,
+        timeout: 20000,
+      });
+      return response.data;
+    } catch (error) {
+      const message = error?.response?.data?.error || error?.message || 'Proxy request failed';
+      throw new Error(`Backend proxy: ${message}`);
+    }
+  }
+
+  async testProxyConnection() {
+    if (!this.hasProxyConfig()) {
+      throw new Error('Укажите Backend URL перед проверкой');
+    }
+
+    const health = await this.proxyGet('/api/health');
+    return {
+      ...health,
+      backendUrl: this.clientSettings.backendUrl,
+      hasAccessKey: Boolean(this.clientSettings.accessKey),
+    };
   }
 
   loadTokenState() {
@@ -327,7 +432,7 @@ class SoundCloudService {
     return {
       id: String(info.id || ''),
       title: info.title || 'Без названия',
-      uploader: info.user?.username || info.user?.full_name || 'SoundCloud',
+      uploader: info.uploader || info.artist || info.user?.username || info.user?.full_name || 'SoundCloud',
       webpage_url: info.webpage_url || info.permalink_url || '',
       thumbnail: artwork ? artwork.replace('-large', '-t500x500') : '',
       track_count: Number(info.track_count || (Array.isArray(info.tracks) ? info.tracks.length : 0)),
@@ -339,10 +444,11 @@ class SoundCloudService {
 
   normalizeArtist(info) {
     const artwork = info.thumbnail || info.avatar_url || '';
+    const title = info.title || info.username || info.full_name || 'Без названия';
     return {
       id: String(info.id || ''),
-      title: info.username || info.full_name || 'Без названия',
-      uploader: info.full_name || info.username || 'SoundCloud',
+      title,
+      uploader: info.uploader || info.full_name || info.username || title || 'SoundCloud',
       webpage_url: info.webpage_url || info.permalink_url || '',
       thumbnail: artwork ? artwork.replace('-large', '-t500x500') : '',
       followers: Number(info.followers_count || 0),
@@ -350,6 +456,67 @@ class SoundCloudService {
       kind: 'artist',
       raw: info,
     };
+  }
+
+  normalizeProxyCollection(info = {}) {
+    const tracks = this.normalizeTrackList(info.tracks || info.entries || []);
+    const normalized = this.normalizePlaylist(info, {
+      kind: info.kind || (info.is_album ? 'album' : undefined),
+    });
+
+    return {
+      ...normalized,
+      track_count: Number(info.track_count || tracks.length || 0),
+      tracks,
+      entries: tracks,
+    };
+  }
+
+  normalizeProxySearchPayload(data = {}, limit = 10) {
+    return {
+      tracks: this.normalizeTrackList(data.tracks || []).slice(0, limit),
+      playlists: (data.playlists || []).map((item) => this.normalizeProxyCollection(item)).filter((item) => item.id).slice(0, limit),
+      albums: (data.albums || []).map((item) => this.normalizeProxyCollection(item)).filter((item) => item.id).slice(0, limit),
+      artists: (data.artists || []).map((item) => this.normalizeArtist(item)).filter((item) => item.id).slice(0, limit),
+    };
+  }
+
+  normalizeProxyArtistProfile(data = {}, options = {}) {
+    const trackLimit = Math.min(Math.max(Number(options.trackLimit || 25), 1), 100);
+    const collectionLimit = Math.min(Math.max(Number(options.collectionLimit || 25), 1), 50);
+
+    return {
+      ...this.normalizeArtist(data),
+      tracks: this.normalizeTrackList(data.tracks || []).slice(0, trackLimit),
+      playlists: (data.playlists || []).map((item) => this.normalizeProxyCollection(item)).filter((item) => item.id).slice(0, collectionLimit),
+      albums: (data.albums || []).map((item) => this.normalizeProxyCollection(item)).filter((item) => item.id).slice(0, collectionLimit),
+    };
+  }
+
+  normalizeProxyResolvedResource(data = {}, fallbackUrl = '') {
+    if (data.kind === 'playlist' || data.kind === 'album') {
+      const collection = this.normalizeProxyCollection(data);
+      return {
+        ...collection,
+        webpage_url: collection.webpage_url || fallbackUrl,
+      };
+    }
+
+    if (data.kind === 'artist') {
+      return this.normalizeProxyArtistProfile(data);
+    }
+
+    if (data.kind === 'track') {
+      return {
+        kind: 'track',
+        track: this.normalizeTrack({
+          ...data,
+          webpage_url: data.webpage_url || fallbackUrl,
+        }),
+      };
+    }
+
+    return data;
   }
 
   isAlbumPlaylist(info) {
@@ -512,6 +679,13 @@ class SoundCloudService {
       return this.playlistDetailsCache.get(cacheKey);
     }
 
+    if (this.hasProxyConfig()) {
+      const data = await this.proxyGet('/api/playlist', { id: cacheKey });
+      const payload = this.normalizeProxyCollection(data);
+      this.playlistDetailsCache.set(cacheKey, payload);
+      return payload;
+    }
+
     const data = await this.apiGet(`/playlists/${encodeURIComponent(cacheKey)}`);
     const tracks = this.normalizeTrackList(data.tracks || []);
     const payload = {
@@ -536,6 +710,17 @@ class SoundCloudService {
 
     if (this.artistProfileCache.has(cacheKey)) {
       return this.artistProfileCache.get(cacheKey);
+    }
+
+    if (this.hasProxyConfig()) {
+      const data = await this.proxyGet('/api/artist', {
+        id: normalizedArtistId,
+        trackLimit,
+        collectionLimit,
+      });
+      const payload = this.normalizeProxyArtistProfile(data, { trackLimit, collectionLimit });
+      this.artistProfileCache.set(cacheKey, payload);
+      return payload;
     }
 
     const [user, trackData, playlistData] = await Promise.all([
@@ -684,6 +869,11 @@ class SoundCloudService {
   }
 
   async searchTracks(query, limit = 10) {
+    if (this.hasProxyConfig()) {
+      const data = await this.proxyGet('/api/search', { q: query, limit });
+      return this.normalizeProxySearchPayload(data, limit).tracks;
+    }
+
     if (this.hasOfficialApiConfig()) {
       return this.searchTracksViaApi(query, limit);
     }
@@ -691,6 +881,11 @@ class SoundCloudService {
   }
 
   async searchAll(query, limit = 10) {
+    if (this.hasProxyConfig()) {
+      const data = await this.proxyGet('/api/search', { q: query, limit });
+      return this.normalizeProxySearchPayload(data, limit);
+    }
+
     if (this.hasOfficialApiConfig()) {
       const [tracks, setResults, artists] = await Promise.all([
         this.searchTracksViaApi(query, limit),
@@ -710,6 +905,11 @@ class SoundCloudService {
   }
 
   async resolveUrl(url) {
+    if (this.hasProxyConfig()) {
+      const data = await this.proxyGet('/api/resolve', { url });
+      return this.normalizeProxyResolvedResource(data, url);
+    }
+
     const data = await this.extractInfo(url, [], { allowPlaylist: true });
     if (data._type === 'playlist' || Array.isArray(data.entries)) {
       const entries = this.normalizeTrackList(

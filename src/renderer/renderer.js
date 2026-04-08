@@ -32,6 +32,10 @@ const state = {
   recoveringFromStreamError: false,
   playerExpanded: false,
   queuePanelOpen: false,
+  settings: {
+    backendUrl: "",
+    accessKey: "",
+  },
 };
 
 const pageMeta = {
@@ -49,6 +53,11 @@ const pageMeta = {
     eyebrow: "Коллекция",
     title: "Библиотека",
     subtitle: "Ваше избранное и локальные плейлисты без лишней суеты.",
+  },
+  settings: {
+    eyebrow: "Подключение",
+    title: "Настройки",
+    subtitle: "Backend proxy для релизной сборки без SoundCloud API keys внутри клиента.",
   },
 };
 
@@ -175,6 +184,12 @@ const el = {
   playerQueueList: document.getElementById("playerQueueList"),
   clearQueueBtn: document.getElementById("clearQueueBtn"),
   closeQueueBtn: document.getElementById("closeQueueBtn"),
+  settingsBackendUrlInput: document.getElementById("settingsBackendUrlInput"),
+  settingsAccessKeyInput: document.getElementById("settingsAccessKeyInput"),
+  settingsSaveBtn: document.getElementById("settingsSaveBtn"),
+  settingsTestBtn: document.getElementById("settingsTestBtn"),
+  settingsStatus: document.getElementById("settingsStatus"),
+  settingsConnectionBadge: document.getElementById("settingsConnectionBadge"),
 };
 
 let modalResolver = null;
@@ -515,6 +530,90 @@ function setSearchInputValue(value, source = "") {
   }
 }
 
+function setSettingsStatus(message, type = "") {
+  if (!el.settingsStatus) return;
+  el.settingsStatus.textContent = message;
+  el.settingsStatus.classList.toggle("success", type === "success");
+  el.settingsStatus.classList.toggle("error", type === "error");
+}
+
+function readSettingsForm() {
+  return {
+    backendUrl: el.settingsBackendUrlInput?.value.trim() || "",
+    accessKey: el.settingsAccessKeyInput?.value.trim() || "",
+  };
+}
+
+function renderSettingsPage() {
+  if (!el.settingsBackendUrlInput || !el.settingsAccessKeyInput) return;
+
+  if (document.activeElement !== el.settingsBackendUrlInput) {
+    el.settingsBackendUrlInput.value = state.settings.backendUrl || "";
+  }
+  if (document.activeElement !== el.settingsAccessKeyInput) {
+    el.settingsAccessKeyInput.value = state.settings.accessKey || "";
+  }
+
+  const proxyEnabled = Boolean(state.settings.backendUrl);
+  if (el.settingsConnectionBadge) {
+    el.settingsConnectionBadge.textContent = proxyEnabled ? "Proxy включен" : "Локальный режим";
+    el.settingsConnectionBadge.classList.toggle("active", proxyEnabled);
+  }
+
+  if (!proxyEnabled) {
+    setSettingsStatus("Backend URL пустой: клиент использует локальные ключи SoundCloud или старый fallback.", "");
+  } else {
+    setSettingsStatus(`Proxy настроен: ${state.settings.backendUrl}`, "success");
+  }
+}
+
+async function loadSettingsState() {
+  try {
+    const response = await window.soundcloudAPI.getSettings();
+    state.settings = unwrapResponse(response, "Не удалось загрузить настройки");
+    renderSettingsPage();
+  } catch (error) {
+    setSettingsStatus(normalizeError(error, "Не удалось загрузить настройки"), "error");
+  }
+}
+
+async function saveSettingsFlow() {
+  try {
+    const settings = readSettingsForm();
+    const response = await window.soundcloudAPI.saveSettings(settings);
+    state.settings = unwrapResponse(response, "Не удалось сохранить настройки");
+    renderSettingsPage();
+    pushToast("Настройки proxy сохранены", "success");
+  } catch (error) {
+    const message = normalizeError(error, "Не удалось сохранить настройки");
+    setSettingsStatus(message, "error");
+    pushToast(message, "error");
+  }
+}
+
+async function testProxyFlow() {
+  try {
+    const settings = readSettingsForm();
+    const saveResponse = await window.soundcloudAPI.saveSettings(settings);
+    state.settings = unwrapResponse(saveResponse, "Не удалось сохранить настройки");
+    renderSettingsPage();
+
+    const response = await window.soundcloudAPI.testProxy();
+    const health = unwrapResponse(response, "Не удалось проверить proxy");
+    const details = [
+      health.hasSoundCloudClientId ? "client_id найден" : "client_id не найден",
+      health.hasSoundCloudClientSecret ? "client_secret найден" : "client_secret не найден",
+      health.hasAppAccessKey ? "APP_ACCESS_KEY включен" : "APP_ACCESS_KEY выключен",
+    ].join(" · ");
+    setSettingsStatus(`Соединение с proxy работает. ${details}`, "success");
+    pushToast("Backend proxy отвечает", "success");
+  } catch (error) {
+    const message = normalizeError(error, "Proxy не отвечает");
+    setSettingsStatus(message, "error");
+    pushToast(message, "error");
+  }
+}
+
 function libraryViewCopy() {
   if (state.libraryTab === "playlists") {
     return {
@@ -616,6 +715,9 @@ function setPage(page) {
   el.navButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.page === page);
   });
+  if (page === "settings") {
+    renderSettingsPage();
+  }
   renderPageHeader();
 }
 
@@ -2060,6 +2162,9 @@ async function resolveUrlFlow() {
       const label = data.kind === "album" ? "Открыт альбом" : "Открыт плейлист";
       showRemoteCollection(data, `${label}: ${data.title}`);
       el.searchInfo.textContent = `${label}: ${data.title}`;
+    } else if (data.kind === "artist") {
+      showArtistProfile(data, `Профиль артиста: ${data.title}`);
+      el.searchInfo.textContent = `Профиль артиста: ${data.title}`;
     } else if (data.track) {
       state.searchViewMode = "results";
       state.searchEntity = null;
@@ -2671,6 +2776,15 @@ function bindEvents() {
   el.searchBtn.addEventListener("click", () => executeSearch(true));
   el.loadMoreBtn.addEventListener("click", loadMoreSearch);
   el.openUrlBtn.addEventListener("click", resolveUrlFlow);
+  el.settingsSaveBtn?.addEventListener("click", saveSettingsFlow);
+  el.settingsTestBtn?.addEventListener("click", testProxyFlow);
+  [el.settingsBackendUrlInput, el.settingsAccessKeyInput].filter(Boolean).forEach((input) => {
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        saveSettingsFlow();
+      }
+    });
+  });
   el.heroSearchBtn.addEventListener("click", () => {
     setPage("search");
     el.searchInput.focus();
@@ -2844,6 +2958,15 @@ function bindEvents() {
   el.searchBtn.addEventListener("click", () => executeSearch(true));
   el.loadMoreBtn.addEventListener("click", loadMoreSearch);
   el.openUrlBtn.addEventListener("click", resolveUrlFlow);
+  el.settingsSaveBtn?.addEventListener("click", saveSettingsFlow);
+  el.settingsTestBtn?.addEventListener("click", testProxyFlow);
+  [el.settingsBackendUrlInput, el.settingsAccessKeyInput].filter(Boolean).forEach((input) => {
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        saveSettingsFlow();
+      }
+    });
+  });
   el.heroSearchBtn.addEventListener("click", () => {
     setPage("search");
     el.searchInput.focus();
@@ -3006,6 +3129,7 @@ function bindEvents() {
   el.audioPlayer.volume = 0.7;
   updateRepeatButton();
   renderPlayerState();
+  await loadSettingsState();
   setPage("home");
   setSearchTab("tracks");
   setLibraryTab("favorites");

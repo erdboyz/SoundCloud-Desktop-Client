@@ -51,6 +51,10 @@
         </div>
 
         <div class="sidebar-bottom">
+          <button class="nav-button nav-subtle sidebar-settings-btn" data-page="settings">
+            <span>Настройки</span>
+          </button>
+
           <div class="sidebar-stat-grid">
             <div class="sidebar-stat-card">
               <strong id="sidebarFavoritesCount">0</strong>
@@ -339,6 +343,66 @@
                 </div>
                 <div id="playlistTracksList" class="track-list"></div>
               </section>
+            </div>
+          </section>
+
+          <section class="page" id="page-settings">
+            <div class="section-head">
+              <div>
+                <h3>Настройки подключения</h3>
+                <p>Здесь можно подключить Vercel backend proxy, чтобы не хранить SoundCloud API keys внутри клиента.</p>
+              </div>
+            </div>
+
+            <div class="dashboard-grid settings-grid">
+              <section class="glass-panel settings-panel">
+                <div class="settings-card-head">
+                  <div>
+                    <div class="focus-type">Backend proxy</div>
+                    <h3>SoundCloud API через ваш сервер</h3>
+                    <p>
+                      Если Backend URL пустой, клиент продолжит использовать локальные ключи или старый fallback. Если URL заполнен,
+                      поиск, плейлисты, альбомы и профили артистов пойдут через proxy.
+                    </p>
+                  </div>
+                  <div id="settingsConnectionBadge" class="settings-badge">Локальный режим</div>
+                </div>
+
+                <div class="settings-form">
+                  <label class="settings-field">
+                    <span>Backend URL</span>
+                    <input id="settingsBackendUrlInput" type="url" placeholder="https://your-project.vercel.app" spellcheck="false" />
+                    <small>Адрес вашего Vercel proxy без приватных SoundCloud ключей внутри клиента.</small>
+                  </label>
+
+                  <label class="settings-field">
+                    <span>Access Key</span>
+                    <input id="settingsAccessKeyInput" type="password" placeholder="APP_ACCESS_KEY" autocomplete="off" spellcheck="false" />
+                    <small>Ключ, который proxy проверяет через заголовок X-App-Key. Если на сервере он выключен, поле можно оставить пустым.</small>
+                  </label>
+                </div>
+
+                <div class="settings-actions">
+                  <button id="settingsSaveBtn" class="primary-btn" type="button">Сохранить</button>
+                  <button id="settingsTestBtn" class="secondary-btn" type="button">Проверить соединение</button>
+                </div>
+
+                <div id="settingsStatus" class="settings-status">
+                  Заполните Backend URL и Access Key из README proxy-проекта, затем сохраните настройки.
+                </div>
+              </section>
+
+              <aside class="glass-panel settings-help-panel">
+                <div class="focus-cover large settings-proxy-cover">
+                  <span>API</span>
+                </div>
+                <div class="focus-type">Как это работает</div>
+                <h3>Ключи остаются на Vercel</h3>
+                <p class="focus-text">
+                  Electron-клиент отправляет запросы на ваш backend proxy. Proxy уже сам обращается к SoundCloud API с client_id
+                  и client_secret, поэтому друзьям не нужны свои ключи, а ваши секреты не попадают в GitHub-релиз.
+                </p>
+              </aside>
             </div>
           </section>
         </div>

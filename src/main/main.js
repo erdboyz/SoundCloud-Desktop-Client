@@ -84,6 +84,30 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('settings:get', async () => {
+    try {
+      return ok(sc.getClientSettings());
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+
+  ipcMain.handle('settings:save', async (_, { settings }) => {
+    try {
+      return ok(sc.saveClientSettings(settings));
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+
+  ipcMain.handle('settings:test-proxy', async () => {
+    try {
+      return ok(await sc.testProxyConnection());
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+
   ipcMain.handle('sc:get-stream', async (_, { trackUrl }) => {
     try {
       return ok(await sc.getStream(trackUrl));

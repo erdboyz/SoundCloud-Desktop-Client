@@ -1853,6 +1853,9 @@ input[type="range"] {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  max-height: min(320px, 48vh);
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .modal-choice {
@@ -1865,6 +1868,17 @@ input[type="range"] {
 .modal-choice.selected {
   border-color: rgba(255, 106, 44, 0.3);
   background: rgba(255, 106, 44, 0.1);
+}
+
+.modal-choice-button {
+  width: 100%;
+  text-align: left;
+  color: var(--text);
+}
+
+.modal-choice-button:hover {
+  border-color: rgba(255, 106, 44, 0.22);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .modal-choice strong {

@@ -502,16 +502,45 @@ async function choosePlaylist(playlists) {
     description: "Выберите локальный плейлист, в который нужно отправить текущий трек.",
     confirmText: "Добавить",
     renderBody: () => {
-      const select = document.createElement("select");
+      let selectedId = String(playlists[0]?.id || "");
+      const list = document.createElement("div");
+      list.className = "modal-choice-list";
+
+      const applySelection = () => {
+        list.querySelectorAll(".modal-choice-button").forEach((button) => {
+          button.classList.toggle("selected", button.dataset.playlistId === selectedId);
+        });
+      };
+
       playlists.forEach((playlist) => {
-        const option = document.createElement("option");
-        option.value = String(playlist.id);
-        option.textContent = `${playlist.name} (${playlist.track_count || 0})`;
-        select.appendChild(option);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "modal-choice modal-choice-button";
+        button.dataset.playlistId = String(playlist.id);
+
+        const title = document.createElement("strong");
+        title.textContent = playlist.name || "Без названия";
+
+        const subtitle = document.createElement("span");
+        subtitle.textContent = `${playlist.track_count || 0} ${trackWord(playlist.track_count || 0)}`;
+
+        button.appendChild(title);
+        button.appendChild(subtitle);
+        button.addEventListener("click", () => {
+          selectedId = button.dataset.playlistId || "";
+          applySelection();
+        });
+
+        list.appendChild(button);
       });
-      return { element: select, select };
+
+      applySelection();
+      return {
+        element: list,
+        getSelectedId: () => Number(selectedId),
+      };
     },
-    onConfirm: ({ select }) => Number(select.value),
+    onConfirm: ({ getSelectedId }) => getSelectedId(),
   });
 }
 
@@ -3122,6 +3151,26 @@ function bindEvents() {
     recoverFromStreamError().catch(() => {});
   });
   el.audioPlayer.addEventListener("ended", handleTrackEnded);
+}
+
+async function openArtistProfile(item) {
+  if (!item?.id) {
+    if (item?.webpage_url) {
+      await openInBrowser(item);
+      return;
+    }
+    pushToast("У этого артиста нет идентификатора", "info");
+    return;
+  }
+
+  try {
+    const response = await window.soundcloudAPI.getArtistProfile(item.id, 25, 25);
+    const profile = unwrapResponse(response, "Не удалось открыть профиль артиста");
+    showArtistProfile(profile, `Профиль артиста: ${profile.title}`);
+    pushToast(`Открыт профиль «${profile.title}»`, "success");
+  } catch (error) {
+    pushToast(normalizeError(error, "Не удалось открыть профиль артиста"), "error");
+  }
 }
 
 (async function init() {

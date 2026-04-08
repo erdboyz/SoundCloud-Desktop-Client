@@ -451,7 +451,7 @@ class SoundCloudService {
       uploader: info.uploader || info.full_name || info.username || title || 'SoundCloud',
       webpage_url: info.webpage_url || info.permalink_url || '',
       thumbnail: artwork ? artwork.replace('-large', '-t500x500') : '',
-      followers: Number(info.followers_count || 0),
+      followers: Number(info.followers || info.followers_count || 0),
       description: info.description || '',
       kind: 'artist',
       raw: info,

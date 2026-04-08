@@ -17,6 +17,12 @@ Desktop-клиент для SoundCloud на Electron.
 - скачивание трека через `yt-dlp`;
 - подключение внешнего backend-сервера через настройки.
 
+## Интерфейс
+
+![Главная](README_images/image.png)
+
+![Поиск](README_images/image-2.png)
+
 ## Стек
 
 - Electron

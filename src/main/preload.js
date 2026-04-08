@@ -9,6 +9,12 @@ contextBridge.exposeInMainWorld('soundcloudAPI', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (settings) => ipcRenderer.invoke('settings:save', { settings }),
   testProxy: () => ipcRenderer.invoke('settings:test-proxy'),
+  onNavigate: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_, payload) => callback(payload);
+    ipcRenderer.on('app:navigate', handler);
+    return () => ipcRenderer.removeListener('app:navigate', handler);
+  },
   getStream: (trackUrl) => ipcRenderer.invoke('sc:get-stream', { trackUrl }),
   preparePlayback: (trackUrl, title) => ipcRenderer.invoke('sc:prepare-playback', { trackUrl, title }),
   downloadTrack: (trackUrl, title) => ipcRenderer.invoke('sc:download-track', { trackUrl, title }),

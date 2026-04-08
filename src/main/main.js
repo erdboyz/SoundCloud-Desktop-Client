@@ -1,12 +1,49 @@
 const path = require('path');
 const fs = require('fs');
-const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, Menu } = require('electron');
 const { SoundCloudService } = require('./services/soundcloud-service');
 const { AppDatabase } = require('./db/database');
 
 let mainWindow;
 let sc;
 let db;
+
+const GITHUB_URL = 'https://github.com/erdboyz/SoundCloud-Desktop-Client';
+const GITHUB_RELEASES_URL = `${GITHUB_URL}/releases`;
+
+function navigateToPage(page) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  mainWindow.focus();
+  mainWindow.webContents.send('app:navigate', { page });
+}
+
+function buildAppMenu() {
+  return Menu.buildFromTemplate([
+    {
+      label: 'Настройки',
+      click: () => navigateToPage('settings'),
+    },
+    {
+      label: 'О программе',
+      click: () => {
+        shell.openExternal(GITHUB_URL).catch(() => {});
+      },
+    },
+    {
+      label: 'Проверить обновления',
+      click: () => {
+        shell.openExternal(GITHUB_RELEASES_URL).catch(() => {});
+      },
+    },
+    {
+      label: 'Выход',
+      role: 'quit',
+    },
+  ]);
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -42,6 +79,7 @@ function ok(data) {
 app.whenReady().then(() => {
   sc = new SoundCloudService();
   db = new AppDatabase();
+  Menu.setApplicationMenu(buildAppMenu());
   createWindow();
 
   ipcMain.handle('sc:search-all', async (_, { query, limit = 10 }) => {

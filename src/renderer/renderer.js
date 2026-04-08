@@ -57,7 +57,7 @@ const pageMeta = {
   settings: {
     eyebrow: "Подключение",
     title: "Настройки",
-    subtitle: "Backend proxy для релизной сборки без SoundCloud API keys внутри клиента.",
+    subtitle: "Здесь можно подключить приложение к серверу для поиска и открытия контента.",
   },
 };
 
@@ -585,14 +585,14 @@ function renderSettingsPage() {
 
   const proxyEnabled = Boolean(state.settings.backendUrl);
   if (el.settingsConnectionBadge) {
-    el.settingsConnectionBadge.textContent = proxyEnabled ? "Proxy включен" : "Локальный режим";
+    el.settingsConnectionBadge.textContent = proxyEnabled ? "Подключено" : "Не подключено";
     el.settingsConnectionBadge.classList.toggle("active", proxyEnabled);
   }
 
   if (!proxyEnabled) {
-    setSettingsStatus("Backend URL пустой: клиент использует локальные ключи SoundCloud или старый fallback.", "");
+    setSettingsStatus("Сервер не подключен. Если у вас есть адрес сервера и ключ доступа, добавьте их здесь.", "");
   } else {
-    setSettingsStatus(`Proxy настроен: ${state.settings.backendUrl}`, "success");
+    setSettingsStatus(`Сервер подключен: ${state.settings.backendUrl}`, "success");
   }
 }
 
@@ -612,7 +612,7 @@ async function saveSettingsFlow() {
     const response = await window.soundcloudAPI.saveSettings(settings);
     state.settings = unwrapResponse(response, "Не удалось сохранить настройки");
     renderSettingsPage();
-    pushToast("Настройки proxy сохранены", "success");
+    pushToast("Настройки сохранены", "success");
   } catch (error) {
     const message = normalizeError(error, "Не удалось сохранить настройки");
     setSettingsStatus(message, "error");
@@ -628,16 +628,19 @@ async function testProxyFlow() {
     renderSettingsPage();
 
     const response = await window.soundcloudAPI.testProxy();
-    const health = unwrapResponse(response, "Не удалось проверить proxy");
-    const details = [
-      health.hasSoundCloudClientId ? "client_id найден" : "client_id не найден",
-      health.hasSoundCloudClientSecret ? "client_secret найден" : "client_secret не найден",
-      health.hasAppAccessKey ? "APP_ACCESS_KEY включен" : "APP_ACCESS_KEY выключен",
-    ].join(" · ");
-    setSettingsStatus(`Соединение с proxy работает. ${details}`, "success");
-    pushToast("Backend proxy отвечает", "success");
+    const health = unwrapResponse(response, "Не удалось проверить подключение");
+    const serverReady = Boolean(health.hasSoundCloudClientId && health.hasSoundCloudClientSecret);
+
+    if (serverReady) {
+      setSettingsStatus("Соединение работает. Приложение готово к поиску и открытию подборок.", "success");
+      pushToast("Подключение установлено", "success");
+      return;
+    }
+
+    setSettingsStatus("Сервер отвечает, но еще не готов к работе. Обратитесь к автору клиента.", "error");
+    pushToast("Сервер пока не готов к работе", "error");
   } catch (error) {
-    const message = normalizeError(error, "Proxy не отвечает");
+    const message = normalizeError(error, "Не удалось подключиться к серверу");
     setSettingsStatus(message, "error");
     pushToast(message, "error");
   }
@@ -3175,6 +3178,13 @@ async function openArtistProfile(item) {
 
 (async function init() {
   bindEvents();
+  if (typeof window.soundcloudAPI.onNavigate === "function") {
+    window.soundcloudAPI.onNavigate((payload) => {
+      const targetPage = typeof payload === "string" ? payload : payload?.page;
+      if (!targetPage) return;
+      setPage(targetPage);
+    });
+  }
   el.audioPlayer.volume = 0.7;
   updateRepeatButton();
   renderPlayerState();

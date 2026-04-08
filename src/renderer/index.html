@@ -349,8 +349,8 @@
           <section class="page" id="page-settings">
             <div class="section-head">
               <div>
-                <h3>Настройки подключения</h3>
-                <p>Здесь можно подключить Vercel backend proxy, чтобы не хранить SoundCloud API keys внутри клиента.</p>
+                <h3>Подключение приложения</h3>
+                <p>Здесь можно указать данные сервера, через который работает поиск и открытие подборок.</p>
               </div>
             </div>
 
@@ -358,27 +358,27 @@
               <section class="glass-panel settings-panel">
                 <div class="settings-card-head">
                   <div>
-                    <div class="focus-type">Backend proxy</div>
-                    <h3>SoundCloud API через ваш сервер</h3>
+                    <div class="focus-type">Сервер</div>
+                    <h3>Подключение к серверу</h3>
                     <p>
-                      Если Backend URL пустой, клиент продолжит использовать локальные ключи или старый fallback. Если URL заполнен,
-                      поиск, плейлисты, альбомы и профили артистов пойдут через proxy.
+                      Если вы получили адрес сервера и ключ доступа, заполните поля ниже и сохраните настройки. После этого
+                      приложение будет использовать подключенный сервер для поиска и открытия контента.
                     </p>
                   </div>
-                  <div id="settingsConnectionBadge" class="settings-badge">Локальный режим</div>
+                  <div id="settingsConnectionBadge" class="settings-badge">Не подключено</div>
                 </div>
 
                 <div class="settings-form">
                   <label class="settings-field">
-                    <span>Backend URL</span>
-                    <input id="settingsBackendUrlInput" type="url" placeholder="https://your-project.vercel.app" spellcheck="false" />
-                    <small>Адрес вашего Vercel proxy без приватных SoundCloud ключей внутри клиента.</small>
+                    <span>Адрес сервера</span>
+                    <input id="settingsBackendUrlInput" type="url" placeholder="https://server.example.com" spellcheck="false" />
+                    <small>Вставьте сюда адрес сервера, который вы получили вместе с приложением.</small>
                   </label>
 
                   <label class="settings-field">
-                    <span>Access Key</span>
-                    <input id="settingsAccessKeyInput" type="password" placeholder="APP_ACCESS_KEY" autocomplete="off" spellcheck="false" />
-                    <small>Ключ, который proxy проверяет через заголовок X-App-Key. Если на сервере он выключен, поле можно оставить пустым.</small>
+                    <span>Ключ доступа</span>
+                    <input id="settingsAccessKeyInput" type="password" placeholder="Введите ключ доступа" autocomplete="off" spellcheck="false" />
+                    <small>Если сервер защищен ключом, введите его здесь. Если ключ не нужен, оставьте поле пустым.</small>
                   </label>
                 </div>
 
@@ -388,19 +388,19 @@
                 </div>
 
                 <div id="settingsStatus" class="settings-status">
-                  Заполните Backend URL и Access Key из README proxy-проекта, затем сохраните настройки.
+                  Введите адрес сервера и, при необходимости, ключ доступа, затем сохраните настройки.
                 </div>
               </section>
 
               <aside class="glass-panel settings-help-panel">
                 <div class="focus-cover large settings-proxy-cover">
-                  <span>API</span>
+                  <span>SC</span>
                 </div>
-                <div class="focus-type">Как это работает</div>
-                <h3>Ключи остаются на Vercel</h3>
+                <div class="focus-type">Справка</div>
+                <h3>Приложение работает через сервер</h3>
                 <p class="focus-text">
-                  Electron-клиент отправляет запросы на ваш backend proxy. Proxy уже сам обращается к SoundCloud API с client_id
-                  и client_secret, поэтому друзьям не нужны свои ключи, а ваши секреты не попадают в GitHub-релиз.
+                  Сервер помогает приложению выполнять поиск, открывать профили артистов, плейлисты и альбомы. Если вы не знаете,
+                  что вводить в поля выше, попросите адрес сервера и ключ доступа у автора клиента.
                 </p>
               </aside>
             </div>

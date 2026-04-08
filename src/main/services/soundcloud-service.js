@@ -32,7 +32,8 @@ const PROXY_HEADER_WHITELIST = [
 
 class SoundCloudService {
   constructor() {
-    this.ytDlp = new YTDlpWrap();
+    this.ytDlpBinaryPath = this.resolveYtDlpBinaryPath();
+    this.ytDlp = this.ytDlpBinaryPath ? new YTDlpWrap(this.ytDlpBinaryPath) : new YTDlpWrap();
     this.cacheDir = path.join(os.tmpdir(), 'soundcloud-electron-client');
     this.playbackCacheDir = path.join(this.cacheDir, 'playback');
     this.streamTokens = new Map();
@@ -50,6 +51,26 @@ class SoundCloudService {
 
     fs.mkdirSync(this.cacheDir, { recursive: true });
     fs.mkdirSync(this.playbackCacheDir, { recursive: true });
+  }
+
+  resolveYtDlpBinaryPath() {
+    if (!app?.isPackaged) {
+      return '';
+    }
+
+    const candidates = [
+      process.resourcesPath ? path.join(process.resourcesPath, 'bin', 'yt-dlp.exe') : '',
+      app?.getAppPath?.() ? path.join(path.dirname(app.getAppPath()), 'bin', 'yt-dlp.exe') : '',
+    ].filter(Boolean);
+
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+
+    console.warn('Packaged yt-dlp.exe was not found in application resources.');
+    return '';
   }
 
   normalizeCredentialValue(value) {
@@ -372,8 +393,18 @@ class SoundCloudService {
   }
 
   async execYtDlp(args) {
-    const output = await this.ytDlp.execPromise(args);
-    return output;
+    try {
+      const output = await this.ytDlp.execPromise(args);
+      return output;
+    } catch (error) {
+      const message = String(error?.message || '');
+
+      if (app?.isPackaged && (!this.ytDlpBinaryPath || /not found|ENOENT/i.test(message))) {
+        throw new Error('Во встроенной версии приложения не найден yt-dlp.exe. Проверьте, что файл попал в resources/bin.');
+      }
+
+      throw error;
+    }
   }
 
   async extractInfo(urlOrSearch, extraArgs = [], options = {}) {

@@ -32,11 +32,109 @@ const state = {
   recoveringFromStreamError: false,
   playerExpanded: false,
   queuePanelOpen: false,
+  playbackVolume: 0.7,
+  playerMuted: false,
+  onboardingOpen: false,
+  heroDismissed: false,
+  hotkeys: {},
+  hotkeysDraft: {},
+  hotkeysDirty: false,
+  capturingHotkeyAction: "",
+  hotkeysStatusText: "",
+  hotkeysStatusType: "",
   settings: {
     backendUrl: "",
     accessKey: "",
   },
 };
+
+const UI_STORAGE_KEY = "soundcloud.desktop.ui.v2";
+const ONBOARDING_VERSION = 1;
+const AUDIO_FADE_DURATION_MS = 180;
+const HOTKEY_ACTIONS = Object.freeze([
+  {
+    id: "search",
+    label: "Быстрый поиск",
+    description: "Открыть поиск и сразу поставить курсор в поле.",
+  },
+  {
+    id: "playPause",
+    label: "Пауза / воспроизведение",
+    description: "Запустить или остановить текущий трек.",
+  },
+  {
+    id: "nextTrack",
+    label: "Следующий трек",
+    description: "Перейти к следующему треку в очереди.",
+  },
+  {
+    id: "previousTrack",
+    label: "Предыдущий трек",
+    description: "Вернуться к предыдущему треку.",
+  },
+  {
+    id: "mute",
+    label: "Отключить звук",
+    description: "Мгновенно выключить или вернуть звук.",
+  },
+  {
+    id: "queue",
+    label: "Очередь",
+    description: "Открыть или закрыть панель очереди.",
+  },
+  {
+    id: "fullscreen",
+    label: "Полный экран плеера",
+    description: "Развернуть или свернуть fullscreen-плеер.",
+  },
+  {
+    id: "like",
+    label: "Лайк текущему треку",
+    description: "Добавить текущий трек в избранное.",
+  },
+]);
+const HOTKEY_DEFAULTS = Object.freeze({
+  search: Object.freeze({ code: "KeyK", ctrlKey: true, altKey: false, shiftKey: false, metaKey: false }),
+  playPause: Object.freeze({ code: "Space", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false }),
+  nextTrack: Object.freeze({ code: "ArrowRight", ctrlKey: false, altKey: false, shiftKey: true, metaKey: false }),
+  previousTrack: Object.freeze({ code: "ArrowLeft", ctrlKey: false, altKey: false, shiftKey: true, metaKey: false }),
+  mute: Object.freeze({ code: "KeyM", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false }),
+  queue: Object.freeze({ code: "KeyQ", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false }),
+  fullscreen: Object.freeze({ code: "KeyF", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false }),
+  like: Object.freeze({ code: "KeyL", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false }),
+});
+const HOTKEY_CODE_LABELS = Object.freeze({
+  Space: "Пробел",
+  ArrowRight: "Вправо",
+  ArrowLeft: "Влево",
+  ArrowUp: "Вверх",
+  ArrowDown: "Вниз",
+  Escape: "Esc",
+  Slash: "/",
+  Enter: "Enter",
+  Tab: "Tab",
+  Backspace: "Backspace",
+  Delete: "Delete",
+  Minus: "-",
+  Equal: "=",
+  Comma: ",",
+  Period: ".",
+  Semicolon: ";",
+  Quote: "'",
+  Backquote: "`",
+  BracketLeft: "[",
+  BracketRight: "]",
+});
+const HOTKEY_MODIFIER_CODES = new Set([
+  "ShiftLeft",
+  "ShiftRight",
+  "ControlLeft",
+  "ControlRight",
+  "AltLeft",
+  "AltRight",
+  "MetaLeft",
+  "MetaRight",
+]);
 
 const pageMeta = {
   home: {
@@ -55,9 +153,9 @@ const pageMeta = {
     subtitle: "Ваше избранное и локальные плейлисты без лишней суеты.",
   },
   settings: {
-    eyebrow: "Подключение",
+    eyebrow: "Конфигурация",
     title: "Настройки",
-    subtitle: "Здесь можно подключить приложение к серверу для поиска и открытия контента.",
+    subtitle: "Здесь можно настроить прокси, горячие клавиши и поведение клиента.",
   },
 };
 
@@ -73,6 +171,7 @@ const el = {
   pageSubtitle: document.getElementById("pageSubtitle"),
   globalSearchInput: document.getElementById("globalSearchInput"),
   topbarSearchBtn: document.getElementById("topbarSearchBtn"),
+  shortcutsBtn: document.getElementById("shortcutsBtn"),
   sidebarPlaylistList: document.getElementById("sidebarPlaylistList"),
   sidebarFavoritesCount: document.getElementById("sidebarFavoritesCount"),
   sidebarRecentCount: document.getElementById("sidebarRecentCount"),
@@ -80,6 +179,8 @@ const el = {
   heroRecentCount: document.getElementById("heroRecentCount"),
   heroFavoritesCount: document.getElementById("heroFavoritesCount"),
   heroPlaylistCount: document.getElementById("heroPlaylistCount"),
+  homeHero: document.getElementById("homeHero"),
+  homeHeroDismissBtn: document.getElementById("homeHeroDismissBtn"),
   heroSearchBtn: document.getElementById("heroSearchBtn"),
   heroPlaylistBtn: document.getElementById("heroPlaylistBtn"),
   refreshRecentBtn: document.getElementById("refreshRecentBtn"),
@@ -190,11 +291,23 @@ const el = {
   settingsTestBtn: document.getElementById("settingsTestBtn"),
   settingsStatus: document.getElementById("settingsStatus"),
   settingsConnectionBadge: document.getElementById("settingsConnectionBadge"),
+  settingsHotkeysList: document.getElementById("settingsHotkeysList"),
+  hotkeysSaveBtn: document.getElementById("hotkeysSaveBtn"),
+  hotkeysResetBtn: document.getElementById("hotkeysResetBtn"),
+  hotkeysStatus: document.getElementById("hotkeysStatus"),
+  restoreHomeHeroBtn: document.getElementById("restoreHomeHeroBtn"),
+  onboardingOverlay: document.getElementById("onboardingOverlay"),
+  onboardingStartBtn: document.getElementById("onboardingStartBtn"),
+  onboardingSearchBtn: document.getElementById("onboardingSearchBtn"),
+  onboardingSettingsBtn: document.getElementById("onboardingSettingsBtn"),
+  onboardingSkipBtn: document.getElementById("onboardingSkipBtn"),
 };
 
 let modalResolver = null;
 let modalContext = null;
 let modalConfirmHandler = null;
+let audioFadeFrame = 0;
+let audioFadeToken = 0;
 
 function unwrapResponse(response, fallbackMessage = "Не удалось выполнить действие") {
   if (!response || response.ok === false) {
@@ -205,6 +318,337 @@ function unwrapResponse(response, fallbackMessage = "Не удалось вып�
 
 function normalizeError(error, fallbackMessage = "Неизвестная ошибка") {
   return error?.message || fallbackMessage;
+}
+
+function readUIStorage() {
+  try {
+    return JSON.parse(window.localStorage.getItem(UI_STORAGE_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function writeUIStorage(nextState = {}) {
+  try {
+    const current = readUIStorage();
+    window.localStorage.setItem(UI_STORAGE_KEY, JSON.stringify({
+      ...current,
+      ...nextState,
+    }));
+  } catch {}
+}
+
+function loadUIState() {
+  const stored = readUIStorage();
+  state.playbackVolume = clampVolume(stored.playbackVolume ?? 0.7);
+  state.playerMuted = Boolean(stored.playerMuted);
+  state.shuffle = Boolean(stored.shuffle);
+  state.repeatMode = Math.max(0, Math.min(2, Number(stored.repeatMode || 0)));
+  state.heroDismissed = Boolean(stored.heroDismissed);
+  state.hotkeys = normalizeHotkeysMap(stored.hotkeys);
+  state.hotkeysDraft = cloneHotkeysMap(state.hotkeys);
+  state.hotkeysDirty = false;
+}
+
+function persistPlayerPreferences() {
+  writeUIStorage({
+    playbackVolume: state.playbackVolume,
+    playerMuted: state.playerMuted,
+    shuffle: state.shuffle,
+    repeatMode: state.repeatMode,
+  });
+}
+
+function hasSeenOnboarding() {
+  return Number(readUIStorage().onboardingVersion || 0) >= ONBOARDING_VERSION;
+}
+
+function markOnboardingSeen() {
+  writeUIStorage({ onboardingVersion: ONBOARDING_VERSION });
+}
+
+function cloneHotkeyBinding(binding) {
+  const source = binding && typeof binding === "object" ? binding : {};
+  return {
+    code: String(source.code || ""),
+    ctrlKey: Boolean(source.ctrlKey),
+    altKey: Boolean(source.altKey),
+    shiftKey: Boolean(source.shiftKey),
+    metaKey: Boolean(source.metaKey),
+  };
+}
+
+function normalizeHotkeysMap(candidate) {
+  return HOTKEY_ACTIONS.reduce((accumulator, action) => {
+    const fallback = HOTKEY_DEFAULTS[action.id];
+    const source = candidate?.[action.id]?.code ? candidate[action.id] : fallback;
+    accumulator[action.id] = cloneHotkeyBinding(source);
+    return accumulator;
+  }, {});
+}
+
+function cloneHotkeysMap(candidate = HOTKEY_DEFAULTS) {
+  return normalizeHotkeysMap(candidate);
+}
+
+function hotkeyBindingsEqual(left, right) {
+  return (
+    String(left?.code || "") === String(right?.code || "") &&
+    Boolean(left?.ctrlKey) === Boolean(right?.ctrlKey) &&
+    Boolean(left?.altKey) === Boolean(right?.altKey) &&
+    Boolean(left?.shiftKey) === Boolean(right?.shiftKey) &&
+    Boolean(left?.metaKey) === Boolean(right?.metaKey)
+  );
+}
+
+function hotkeyMapsEqual(left, right) {
+  return HOTKEY_ACTIONS.every((action) => hotkeyBindingsEqual(left?.[action.id], right?.[action.id]));
+}
+
+function persistHotkeys() {
+  writeUIStorage({ hotkeys: state.hotkeys });
+}
+
+function hotkeyActionMeta(actionId) {
+  return HOTKEY_ACTIONS.find((action) => action.id === actionId) || null;
+}
+
+function hotkeyCodeLabel(code) {
+  if (!code) return "";
+  if (HOTKEY_CODE_LABELS[code]) return HOTKEY_CODE_LABELS[code];
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit\d$/.test(code)) return code.slice(5);
+  if (code.startsWith("Numpad")) return `Num ${code.slice(6)}`;
+  return code.replace(/([a-z])([A-Z])/g, "$1 $2");
+}
+
+function formatHotkey(binding) {
+  if (!binding?.code) return "Не назначено";
+  const parts = [];
+  if (binding.ctrlKey) parts.push("Ctrl");
+  if (binding.metaKey) parts.push("Cmd");
+  if (binding.altKey) parts.push("Alt");
+  if (binding.shiftKey) parts.push("Shift");
+  parts.push(hotkeyCodeLabel(binding.code));
+  return parts.join(" + ");
+}
+
+function hotkeyTitleSuffix(actionId) {
+  const label = formatHotkey(state.hotkeys[actionId]);
+  return label && label !== "Не назначено" ? ` (${label})` : "";
+}
+
+function hotkeyMatchesEvent(binding, event) {
+  if (!binding?.code) return false;
+  return (
+    binding.code === event.code &&
+    Boolean(binding.ctrlKey) === Boolean(event.ctrlKey) &&
+    Boolean(binding.metaKey) === Boolean(event.metaKey) &&
+    Boolean(binding.altKey) === Boolean(event.altKey) &&
+    Boolean(binding.shiftKey) === Boolean(event.shiftKey)
+  );
+}
+
+function resolveHotkeyAction(event) {
+  return HOTKEY_ACTIONS.find((action) => hotkeyMatchesEvent(state.hotkeys[action.id], event))?.id || "";
+}
+
+function findHotkeyConflict(actionId, binding, hotkeysMap = state.hotkeysDraft) {
+  return HOTKEY_ACTIONS.find((action) => action.id !== actionId && hotkeyBindingsEqual(hotkeysMap[action.id], binding)) || null;
+}
+
+function setHotkeysStatus(message, type = "") {
+  state.hotkeysStatusText = message;
+  state.hotkeysStatusType = type;
+}
+
+function syncHotkeysDirtyFlag() {
+  state.hotkeysDirty = !hotkeyMapsEqual(state.hotkeysDraft, state.hotkeys);
+}
+
+function updateHotkeysDraft(actionId, binding) {
+  state.hotkeysDraft = {
+    ...state.hotkeysDraft,
+    [actionId]: cloneHotkeyBinding(binding),
+  };
+  syncHotkeysDirtyFlag();
+}
+
+function beginHotkeyCapture(actionId) {
+  state.capturingHotkeyAction = actionId;
+  state.hotkeysStatusText = "";
+  state.hotkeysStatusType = "";
+  renderSettingsPage();
+}
+
+function resetHotkeyDraft(actionId) {
+  const action = hotkeyActionMeta(actionId);
+  updateHotkeysDraft(actionId, HOTKEY_DEFAULTS[actionId]);
+  setHotkeysStatus(`Сочетание для «${action?.label || actionId}» возвращено к значению по умолчанию.`, "");
+  renderSettingsPage();
+}
+
+function resetAllHotkeysDraft() {
+  state.capturingHotkeyAction = "";
+  state.hotkeysDraft = cloneHotkeysMap(HOTKEY_DEFAULTS);
+  syncHotkeysDirtyFlag();
+  setHotkeysStatus("Стандартный набор горячих клавиш готов к сохранению.", "");
+  renderSettingsPage();
+}
+
+function saveHotkeys() {
+  if (state.capturingHotkeyAction) {
+    setHotkeysStatus("Сначала завершите захват новой комбинации.", "error");
+    renderSettingsPage();
+    return;
+  }
+
+  state.hotkeys = cloneHotkeysMap(state.hotkeysDraft);
+  state.hotkeysDirty = false;
+  persistHotkeys();
+  setHotkeysStatus("Горячие клавиши сохранены.", "success");
+  refreshControlTitles();
+  renderHotkeyHints();
+  renderSettingsPage();
+  pushToast("Горячие клавиши сохранены", "success");
+}
+
+function buildHotkeyBindingFromEvent(event) {
+  return cloneHotkeyBinding({
+    code: event.code,
+    ctrlKey: event.ctrlKey,
+    altKey: event.altKey,
+    shiftKey: event.shiftKey,
+    metaKey: event.metaKey,
+  });
+}
+
+function handleHotkeyCapture(event) {
+  if (!state.capturingHotkeyAction) {
+    return false;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  if (event.key === "Escape") {
+    state.capturingHotkeyAction = "";
+    setHotkeysStatus("Переназначение отменено.", "");
+    renderSettingsPage();
+    return true;
+  }
+
+  if (HOTKEY_MODIFIER_CODES.has(event.code)) {
+    return true;
+  }
+
+  const actionId = state.capturingHotkeyAction;
+  const action = hotkeyActionMeta(actionId);
+  const binding = buildHotkeyBindingFromEvent(event);
+  const conflict = findHotkeyConflict(actionId, binding);
+
+  if (conflict) {
+    const conflictAction = hotkeyActionMeta(conflict.id);
+    state.capturingHotkeyAction = "";
+    setHotkeysStatus(
+      `Сочетание ${formatHotkey(binding)} уже используется командой «${conflictAction?.label || conflict.id}».`,
+      "error"
+    );
+    renderSettingsPage();
+    return true;
+  }
+
+  state.capturingHotkeyAction = "";
+  updateHotkeysDraft(actionId, binding);
+  setHotkeysStatus(`Сочетание для «${action?.label || actionId}» готово к сохранению.`, "");
+  renderSettingsPage();
+  return true;
+}
+
+function isTypingTarget(target) {
+  const element = target instanceof HTMLElement ? target : null;
+  if (!element) return false;
+  return Boolean(
+    element.isContentEditable ||
+    element.closest("input, textarea, select, [contenteditable='true']")
+  );
+}
+
+function clampVolume(value) {
+  return Math.max(0, Math.min(1, Number(value || 0)));
+}
+
+function clearAudioFade() {
+  audioFadeToken += 1;
+  if (audioFadeFrame) {
+    cancelAnimationFrame(audioFadeFrame);
+    audioFadeFrame = 0;
+  }
+}
+
+function desiredOutputVolume() {
+  return state.playerMuted ? 0 : state.playbackVolume;
+}
+
+function setElementVolume(value) {
+  el.audioPlayer.muted = false;
+  el.audioPlayer.volume = clampVolume(value);
+}
+
+function fadeAudioTo(targetVolume, options = {}) {
+  const duration = Math.max(1, Number(options.duration || AUDIO_FADE_DURATION_MS));
+  const pauseAtEnd = Boolean(options.pauseAtEnd);
+  clearAudioFade();
+  const token = audioFadeToken;
+  const startVolume = clampVolume(el.audioPlayer.volume);
+  const endVolume = clampVolume(targetVolume);
+
+  if (duration <= 1 || Math.abs(startVolume - endVolume) < 0.01) {
+    setElementVolume(endVolume);
+    if (pauseAtEnd) {
+      el.audioPlayer.pause();
+    }
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    const startedAt = performance.now();
+
+    const tick = (now) => {
+      if (token !== audioFadeToken) {
+        resolve();
+        return;
+      }
+
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setElementVolume(startVolume + ((endVolume - startVolume) * eased));
+
+      if (progress >= 1) {
+        audioFadeFrame = 0;
+        if (pauseAtEnd) {
+          el.audioPlayer.pause();
+        }
+        resolve();
+        return;
+      }
+
+      audioFadeFrame = requestAnimationFrame(tick);
+    };
+
+    audioFadeFrame = requestAnimationFrame(tick);
+  });
+}
+
+async function applyOutputVolume(options = {}) {
+  const smooth = Boolean(options.smooth);
+  const duration = Number(options.duration || 140);
+  if (smooth && !el.audioPlayer.paused) {
+    await fadeAudioTo(desiredOutputVolume(), { duration });
+    return;
+  }
+  clearAudioFade();
+  setElementVolume(desiredOutputVolume());
 }
 
 function escapeHtml(value) {
@@ -544,6 +988,162 @@ async function choosePlaylist(playlists) {
   });
 }
 
+function setOnboardingOpen(open) {
+  state.onboardingOpen = Boolean(open);
+  el.onboardingOverlay?.classList.toggle("hidden", !state.onboardingOpen);
+  document.body.classList.toggle("onboarding-open", state.onboardingOpen);
+}
+
+function dismissOnboarding(options = {}) {
+  const markSeen = options.markSeen !== false;
+  if (markSeen) {
+    markOnboardingSeen();
+  }
+  setOnboardingOpen(false);
+}
+
+function showOnboarding(force = false) {
+  if (!force && hasSeenOnboarding()) {
+    return;
+  }
+  renderHotkeyHints();
+  setOnboardingOpen(true);
+  window.setTimeout(() => el.onboardingStartBtn?.focus(), 0);
+}
+
+function focusSearchFromShortcut() {
+  setPage("search");
+  const target = state.page === "search" ? el.searchInput : el.globalSearchInput;
+  window.setTimeout(() => {
+    target?.focus();
+    target?.select?.();
+  }, 0);
+}
+
+function syncHomeHeroVisibility() {
+  el.homeHero?.classList.toggle("hidden", state.heroDismissed);
+}
+
+function dismissHomeHero() {
+  state.heroDismissed = true;
+  writeUIStorage({ heroDismissed: true });
+  syncHomeHeroVisibility();
+}
+
+function restoreHomeHero() {
+  state.heroDismissed = false;
+  writeUIStorage({ heroDismissed: false });
+  syncHomeHeroVisibility();
+}
+
+function syncCompactLayout() {
+  const compact = window.innerWidth <= 1440 || window.innerHeight <= 820;
+  document.body.classList.toggle("compact-ui", compact);
+}
+
+function renderHotkeyHints() {
+  document.querySelectorAll("[data-hotkey-display]").forEach((node) => {
+    const actionId = node.dataset.hotkeyDisplay;
+    if (!actionId) return;
+    node.textContent = formatHotkey(state.hotkeys[actionId]);
+  });
+}
+
+function refreshControlTitles() {
+  if (el.playPauseBtn) el.playPauseBtn.title = `Пауза / воспроизведение${hotkeyTitleSuffix("playPause")}`;
+  if (el.fullscreenPlayPauseBtn) el.fullscreenPlayPauseBtn.title = `Пауза / воспроизведение${hotkeyTitleSuffix("playPause")}`;
+  if (el.prevBtn) el.prevBtn.title = `Предыдущий трек${hotkeyTitleSuffix("previousTrack")}`;
+  if (el.fullscreenPrevBtn) el.fullscreenPrevBtn.title = `Предыдущий трек${hotkeyTitleSuffix("previousTrack")}`;
+  if (el.nextBtn) el.nextBtn.title = `Следующий трек${hotkeyTitleSuffix("nextTrack")}`;
+  if (el.fullscreenNextBtn) el.fullscreenNextBtn.title = `Следующий трек${hotkeyTitleSuffix("nextTrack")}`;
+  if (el.queueBtn) el.queueBtn.title = `Очередь${hotkeyTitleSuffix("queue")}`;
+  if (el.fullscreenQueueBtn) el.fullscreenQueueBtn.title = `Очередь${hotkeyTitleSuffix("queue")}`;
+  if (el.muteBtn) el.muteBtn.title = `Отключить звук${hotkeyTitleSuffix("mute")}`;
+  if (el.fullscreenMuteBtn) el.fullscreenMuteBtn.title = `Отключить звук${hotkeyTitleSuffix("mute")}`;
+  if (el.playerFavoriteBtn) el.playerFavoriteBtn.title = `Лайк текущему треку${hotkeyTitleSuffix("like")}`;
+}
+
+async function handleGlobalKeyboardShortcuts(event) {
+  const key = String(event.key || "");
+
+  if (key === "Escape") {
+    if (state.onboardingOpen) {
+      event.preventDefault();
+      dismissOnboarding();
+      return;
+    }
+    if (!el.modalOverlay.classList.contains("hidden")) {
+      event.preventDefault();
+      closeModal(null);
+      return;
+    }
+    if (state.queuePanelOpen) {
+      event.preventDefault();
+      toggleQueuePanel(false);
+      return;
+    }
+    if (state.playerExpanded) {
+      event.preventDefault();
+      setPlayerExpanded(false);
+    }
+    return;
+  }
+
+  if (state.onboardingOpen || !el.modalOverlay.classList.contains("hidden")) {
+    return;
+  }
+
+  if (isTypingTarget(event.target)) {
+    return;
+  }
+
+  const actionId = resolveHotkeyAction(event);
+  if (!actionId) {
+    return;
+  }
+
+  event.preventDefault();
+
+  if (actionId === "search") {
+    focusSearchFromShortcut();
+    return;
+  }
+
+  if (actionId === "playPause") {
+    await handlePlayPause();
+    return;
+  }
+
+  if (actionId === "nextTrack") {
+    await playByOffset(1);
+    return;
+  }
+
+  if (actionId === "previousTrack") {
+    await playByOffset(-1);
+    return;
+  }
+
+  if (actionId === "mute") {
+    toggleMuteState();
+    return;
+  }
+
+  if (actionId === "queue") {
+    toggleQueuePanel();
+    return;
+  }
+
+  if (actionId === "fullscreen") {
+    setPlayerExpanded(!state.playerExpanded);
+    return;
+  }
+
+  if (actionId === "like" && state.currentTrack) {
+    await toggleFavoriteForItem(state.currentTrack);
+  }
+}
+
 function setButtonsDisabledForScope(scope, disabled) {
   scope.querySelectorAll("[data-action]").forEach((button) => {
     button.disabled = disabled;
@@ -593,6 +1193,57 @@ function renderSettingsPage() {
     setSettingsStatus("Сервер не подключен. Если у вас есть адрес сервера и ключ доступа, добавьте их здесь.", "");
   } else {
     setSettingsStatus(`Сервер подключен: ${state.settings.backendUrl}`, "success");
+  }
+
+  renderSettingsHotkeys();
+  if (el.restoreHomeHeroBtn) {
+    el.restoreHomeHeroBtn.disabled = !state.heroDismissed;
+  }
+}
+
+function renderSettingsHotkeys() {
+  if (!el.settingsHotkeysList || !el.hotkeysStatus) {
+    return;
+  }
+
+  el.settingsHotkeysList.innerHTML = HOTKEY_ACTIONS.map((action) => {
+    const binding = state.hotkeysDraft[action.id];
+    const capturing = state.capturingHotkeyAction === action.id;
+    const bindingLabel = capturing ? "Нажмите сочетание" : formatHotkey(binding);
+
+    return `
+      <article class="hotkey-row ${capturing ? "capturing" : ""}" data-hotkey-id="${action.id}">
+        <div class="hotkey-copy">
+          <div class="hotkey-title">${escapeHtml(action.label)}</div>
+          <div class="hotkey-description">${escapeHtml(action.description)}</div>
+        </div>
+        <button
+          class="secondary-btn hotkey-binding-btn ${capturing ? "capturing" : ""}"
+          type="button"
+          data-hotkey-command="capture"
+          data-hotkey-id="${action.id}"
+        >${escapeHtml(bindingLabel)}</button>
+        <button class="text-btn hotkey-reset-btn" type="button" data-hotkey-command="reset" data-hotkey-id="${action.id}">Сбросить</button>
+      </article>
+    `;
+  }).join("");
+
+  if (el.hotkeysSaveBtn) {
+    el.hotkeysSaveBtn.disabled = !state.hotkeysDirty;
+  }
+
+  const statusText = state.hotkeysStatusText || (
+    state.capturingHotkeyAction
+      ? "Нажмите новую комбинацию. Esc отменит захват."
+      : state.hotkeysDirty
+        ? "Есть несохраненные изменения. Нажмите «Сохранить хоткеи», чтобы применить их."
+        : "Нажмите «Изменить», затем нужное сочетание клавиш. Esc в клиенте по-прежнему закрывает панели и окна."
+  );
+
+  el.hotkeysStatus.textContent = statusText;
+  el.hotkeysStatus.classList.remove("success", "error");
+  if (state.hotkeysStatusType) {
+    el.hotkeysStatus.classList.add(state.hotkeysStatusType);
   }
 }
 
@@ -1318,6 +1969,25 @@ function renderPlayerState() {
   updatePlayerArtwork(track);
 }
 
+function volumeIcon() {
+  if (state.playerMuted || state.playbackVolume <= 0.001) return "\u{1F507}";
+  if (state.playbackVolume < 0.45) return "\u{1F509}";
+  return "\u{1F50A}";
+}
+
+function updateVolumeControls() {
+  const volumeValue = Math.round((state.playerMuted ? 0 : state.playbackVolume) * 100);
+  volumeSliders().forEach((slider) => {
+    if (document.activeElement !== slider) {
+      slider.value = volumeValue;
+    }
+  });
+  muteButtons().forEach((button) => {
+    button.textContent = volumeIcon();
+    button.classList.toggle("active", state.playerMuted);
+  });
+}
+
 function kindLabel(item) {
   if (!item) return "Ничего не выбрано";
   if (item.kind === "playlist-local") return "Локальный плейлист";
@@ -1766,6 +2436,9 @@ function renderSidebar() {
 }
 
 function renderHome() {
+  syncHomeHeroVisibility();
+  renderHotkeyHints();
+
   const recent = recentTracks().slice(0, 6);
   const favorites = favoriteTracks();
   const mix = [...favorites, ...recentTracks()]
@@ -2306,10 +2979,18 @@ async function downloadSelectedTrack(item = state.selectedItem) {
 }
 
 async function startAudioSource(sourceUrl) {
-  el.audioPlayer.pause();
+  const shouldFadeOutCurrent = Boolean(el.audioPlayer.src && !el.audioPlayer.paused);
+  if (shouldFadeOutCurrent) {
+    await fadeAudioTo(0, { duration: 120, pauseAtEnd: true });
+  } else {
+    clearAudioFade();
+    el.audioPlayer.pause();
+  }
   el.audioPlayer.src = sourceUrl;
   el.audioPlayer.load();
+  setElementVolume(0);
   await el.audioPlayer.play();
+  await applyOutputVolume({ smooth: true, duration: 220 });
 }
 
 function updateQueueState(item, queue) {
@@ -2659,15 +3340,19 @@ async function handlePlayPause() {
   }
 
   if (el.audioPlayer.paused) {
+    setElementVolume(0);
     await el.audioPlayer.play().catch(() => {});
+    await applyOutputVolume({ smooth: true, duration: 220 });
   } else {
-    el.audioPlayer.pause();
+    await fadeAudioTo(0, { duration: 180, pauseAtEnd: true });
+    setElementVolume(desiredOutputVolume());
   }
   renderPlayerState();
 }
 
 function toggleShuffleMode() {
   state.shuffle = !state.shuffle;
+  persistPlayerPreferences();
   updateShuffleButtons();
   if (state.shuffle) {
     shuffleQueue();
@@ -2679,18 +3364,23 @@ function toggleShuffleMode() {
 function cycleRepeatMode() {
   state.repeatMode = (state.repeatMode + 1) % 3;
   state.currentTrackRepeatPasses = 0;
+  persistPlayerPreferences();
   updateRepeatButton();
   renderPlayerState();
 }
 
 function syncPlayerVolume(value) {
-  el.audioPlayer.muted = false;
-  el.audioPlayer.volume = Math.max(0, Math.min(100, Number(value || 0))) / 100;
+  state.playbackVolume = clampVolume(Number(value || 0) / 100);
+  state.playerMuted = false;
+  persistPlayerPreferences();
+  applyOutputVolume({ smooth: true, duration: 120 }).catch(() => {});
   updateVolumeControls();
 }
 
 function toggleMuteState() {
-  el.audioPlayer.muted = !el.audioPlayer.muted;
+  state.playerMuted = !state.playerMuted;
+  persistPlayerPreferences();
+  applyOutputVolume({ smooth: true, duration: 120 }).catch(() => {});
   updateVolumeControls();
 }
 
@@ -2698,7 +3388,9 @@ async function handleTrackEnded() {
   if (state.currentTrackRepeatPasses < state.repeatMode) {
     state.currentTrackRepeatPasses += 1;
     el.audioPlayer.currentTime = 0;
+    setElementVolume(0);
     await el.audioPlayer.play().catch(() => {});
+    await applyOutputVolume({ smooth: true, duration: 200 });
     renderPlayerState();
     return;
   }
@@ -2752,7 +3444,7 @@ function bindDetailActions() {
   });
 }
 
-function bindEvents() {
+function bindEventsLegacyUnused() {
   el.navButtons.forEach((button) => {
     button.addEventListener("click", () => setPage(button.dataset.page));
   });
@@ -2810,6 +3502,8 @@ function bindEvents() {
   el.openUrlBtn.addEventListener("click", resolveUrlFlow);
   el.settingsSaveBtn?.addEventListener("click", saveSettingsFlow);
   el.settingsTestBtn?.addEventListener("click", testProxyFlow);
+  el.hotkeysSaveBtn?.addEventListener("click", saveHotkeys);
+  el.hotkeysResetBtn?.addEventListener("click", resetAllHotkeysDraft);
   [el.settingsBackendUrlInput, el.settingsAccessKeyInput].filter(Boolean).forEach((input) => {
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
@@ -2818,8 +3512,22 @@ function bindEvents() {
     });
   });
   el.heroSearchBtn.addEventListener("click", () => {
-    setPage("search");
-    el.searchInput.focus();
+    focusSearchFromShortcut();
+  });
+  el.onboardingStartBtn?.addEventListener("click", () => dismissOnboarding());
+  el.onboardingSkipBtn?.addEventListener("click", () => dismissOnboarding());
+  el.onboardingSearchBtn?.addEventListener("click", () => {
+    dismissOnboarding();
+    focusSearchFromShortcut();
+  });
+  el.onboardingSettingsBtn?.addEventListener("click", () => {
+    dismissOnboarding();
+    setPage("settings");
+  });
+  el.onboardingOverlay?.addEventListener("click", (event) => {
+    if (event.target === el.onboardingOverlay) {
+      dismissOnboarding();
+    }
   });
 
   el.createPlaylistBtn?.addEventListener("click", createPlaylistFlow);
@@ -2987,11 +3695,14 @@ function bindEvents() {
     setPage("search");
     executeSearch(true);
   });
+  el.shortcutsBtn?.addEventListener("click", () => showOnboarding(true));
   el.searchBtn.addEventListener("click", () => executeSearch(true));
   el.loadMoreBtn.addEventListener("click", loadMoreSearch);
   el.openUrlBtn.addEventListener("click", resolveUrlFlow);
   el.settingsSaveBtn?.addEventListener("click", saveSettingsFlow);
   el.settingsTestBtn?.addEventListener("click", testProxyFlow);
+  el.hotkeysSaveBtn?.addEventListener("click", saveHotkeys);
+  el.hotkeysResetBtn?.addEventListener("click", resetAllHotkeysDraft);
   [el.settingsBackendUrlInput, el.settingsAccessKeyInput].filter(Boolean).forEach((input) => {
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
@@ -3000,8 +3711,44 @@ function bindEvents() {
     });
   });
   el.heroSearchBtn.addEventListener("click", () => {
-    setPage("search");
-    el.searchInput.focus();
+    focusSearchFromShortcut();
+  });
+  el.homeHeroDismissBtn?.addEventListener("click", dismissHomeHero);
+  el.restoreHomeHeroBtn?.addEventListener("click", () => {
+    restoreHomeHero();
+    pushToast("Приветственный блок снова включен", "success");
+  });
+  el.onboardingStartBtn?.addEventListener("click", () => dismissOnboarding());
+  el.onboardingSkipBtn?.addEventListener("click", () => dismissOnboarding());
+  el.onboardingSearchBtn?.addEventListener("click", () => {
+    dismissOnboarding();
+    focusSearchFromShortcut();
+  });
+  el.onboardingSettingsBtn?.addEventListener("click", () => {
+    dismissOnboarding();
+    setPage("settings");
+  });
+  el.onboardingOverlay?.addEventListener("click", (event) => {
+    if (event.target === el.onboardingOverlay) {
+      dismissOnboarding();
+    }
+  });
+  el.settingsHotkeysList?.addEventListener("click", (event) => {
+    const commandNode = event.target.closest("[data-hotkey-command]");
+    if (!commandNode) return;
+
+    const actionId = commandNode.dataset.hotkeyId || "";
+    const command = commandNode.dataset.hotkeyCommand || "";
+    if (!actionId || !command) return;
+
+    if (command === "capture") {
+      beginHotkeyCapture(actionId);
+      return;
+    }
+
+    if (command === "reset") {
+      resetHotkeyDraft(actionId);
+    }
   });
 
   el.createPlaylistBtn?.addEventListener("click", createPlaylistFlow);
@@ -3037,24 +3784,16 @@ function bindEvents() {
   });
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      if (!el.modalOverlay.classList.contains("hidden")) {
-        closeModal(null);
-        return;
-      }
-      if (state.queuePanelOpen) {
-        toggleQueuePanel(false);
-        return;
-      }
-      if (state.playerExpanded) {
-        setPlayerExpanded(false);
-      }
+    if (handleHotkeyCapture(event)) {
+      return;
     }
 
     if ((event.key === "Enter" || event.key === " ") && document.activeElement === el.playerArtist) {
       event.preventDefault();
       openCurrentTrackArtist().catch(() => {});
+      return;
     }
+    handleGlobalKeyboardShortcuts(event).catch(() => {});
   });
 
   el.playerBar?.addEventListener("dblclick", (event) => {
@@ -3154,6 +3893,7 @@ function bindEvents() {
     recoverFromStreamError().catch(() => {});
   });
   el.audioPlayer.addEventListener("ended", handleTrackEnded);
+  window.addEventListener("resize", syncCompactLayout);
 }
 
 async function openArtistProfile(item) {
@@ -3177,6 +3917,7 @@ async function openArtistProfile(item) {
 }
 
 (async function init() {
+  loadUIState();
   bindEvents();
   if (typeof window.soundcloudAPI.onNavigate === "function") {
     window.soundcloudAPI.onNavigate((payload) => {
@@ -3185,7 +3926,11 @@ async function openArtistProfile(item) {
       setPage(targetPage);
     });
   }
-  el.audioPlayer.volume = 0.7;
+  syncCompactLayout();
+  syncHomeHeroVisibility();
+  renderHotkeyHints();
+  refreshControlTitles();
+  setElementVolume(desiredOutputVolume());
   updateRepeatButton();
   renderPlayerState();
   await loadSettingsState();
@@ -3198,4 +3943,7 @@ async function openArtistProfile(item) {
   showEmptyState(el.searchAlbums, "Введите запрос, чтобы увидеть найденные альбомы.");
   showEmptyState(el.searchArtists, "Введите запрос, чтобы увидеть найденных исполнителей.");
   await loadLibraryState();
+  if (!hasSeenOnboarding()) {
+    window.setTimeout(() => showOnboarding(), 260);
+  }
 })();

@@ -92,7 +92,8 @@
 
         <div class="page-scroll">
           <section class="page active" id="page-home">
-            <div class="hero-panel">
+            <div id="homeHero" class="hero-panel">
+              <button id="homeHeroDismissBtn" class="hero-dismiss-btn" type="button" title="Скрыть приветственный блок">✕</button>
               <div class="hero-copy">
                 <div class="hero-kicker">Твой desktop-поток</div>
                 <h2>Темный, быстрый и аккуратный клиент для SoundCloud.</h2>
@@ -103,6 +104,12 @@
                 <div class="hero-actions">
                   <button id="heroSearchBtn" class="primary-btn">Открыть поиск</button>
                   <button id="heroPlaylistBtn" class="secondary-btn">Открыть плейлисты</button>
+                </div>
+                <div class="hero-shortcuts">
+                  <div class="shortcut-pill"><span class="shortcut-key" data-hotkey-display="search">Ctrl + K</span><span>Быстрый поиск</span></div>
+                  <div class="shortcut-pill"><span class="shortcut-key" data-hotkey-display="playPause">Space</span><span>Пауза и старт</span></div>
+                  <div class="shortcut-pill"><span class="shortcut-key" data-hotkey-display="queue">Q</span><span>Очередь</span></div>
+                  <div class="shortcut-pill"><span class="shortcut-key" data-hotkey-display="fullscreen">F</span><span>Полный экран плеера</span></div>
                 </div>
               </div>
 
@@ -355,42 +362,68 @@
             </div>
 
             <div class="dashboard-grid settings-grid">
-              <section class="glass-panel settings-panel">
-                <div class="settings-card-head">
-                  <div>
-                    <div class="focus-type">Сервер</div>
-                    <h3>Подключение к серверу</h3>
-                    <p>
-                      Если вы получили адрес сервера и ключ доступа, заполните поля ниже и сохраните настройки. После этого
-                      приложение будет использовать подключенный сервер для поиска и открытия контента.
-                    </p>
+              <div class="settings-stack">
+                <section id="settingsProxySection" class="glass-panel settings-panel">
+                  <div class="settings-card-head">
+                    <div>
+                      <div class="focus-type">Прокси</div>
+                      <h3>Подключение к серверу</h3>
+                      <p>
+                        Если вы получили адрес сервера и ключ доступа, заполните поля ниже и сохраните настройки. После этого
+                        приложение будет использовать подключенный сервер для поиска и открытия контента.
+                      </p>
+                    </div>
+                    <div id="settingsConnectionBadge" class="settings-badge">Не подключено</div>
                   </div>
-                  <div id="settingsConnectionBadge" class="settings-badge">Не подключено</div>
-                </div>
 
-                <div class="settings-form">
-                  <label class="settings-field">
-                    <span>Адрес сервера</span>
-                    <input id="settingsBackendUrlInput" type="url" placeholder="https://server.example.com" spellcheck="false" />
-                    <small>Вставьте сюда адрес сервера, который вы получили вместе с приложением.</small>
-                  </label>
+                  <div class="settings-form">
+                    <label class="settings-field">
+                      <span>Адрес сервера</span>
+                      <input id="settingsBackendUrlInput" type="url" placeholder="https://server.example.com" spellcheck="false" />
+                      <small>Вставьте сюда адрес сервера, который вы получили вместе с приложением.</small>
+                    </label>
 
-                  <label class="settings-field">
-                    <span>Ключ доступа</span>
-                    <input id="settingsAccessKeyInput" type="password" placeholder="Введите ключ доступа" autocomplete="off" spellcheck="false" />
-                    <small>Если сервер защищен ключом, введите его здесь. Если ключ не нужен, оставьте поле пустым.</small>
-                  </label>
-                </div>
+                    <label class="settings-field">
+                      <span>Ключ доступа</span>
+                      <input id="settingsAccessKeyInput" type="password" placeholder="Введите ключ доступа" autocomplete="off" spellcheck="false" />
+                      <small>Если сервер защищен ключом, введите его здесь. Если ключ не нужен, оставьте поле пустым.</small>
+                    </label>
+                  </div>
 
-                <div class="settings-actions">
-                  <button id="settingsSaveBtn" class="primary-btn" type="button">Сохранить</button>
-                  <button id="settingsTestBtn" class="secondary-btn" type="button">Проверить соединение</button>
-                </div>
+                  <div class="settings-actions">
+                    <button id="settingsSaveBtn" class="primary-btn" type="button">Сохранить</button>
+                    <button id="settingsTestBtn" class="secondary-btn" type="button">Проверить соединение</button>
+                  </div>
 
-                <div id="settingsStatus" class="settings-status">
-                  Введите адрес сервера и, при необходимости, ключ доступа, затем сохраните настройки.
-                </div>
-              </section>
+                  <div id="settingsStatus" class="settings-status">
+                    Введите адрес сервера и, при необходимости, ключ доступа, затем сохраните настройки.
+                  </div>
+                </section>
+
+                <section id="settingsHotkeysSection" class="glass-panel settings-panel settings-hotkeys-panel">
+                  <div class="settings-card-head">
+                    <div>
+                      <div class="focus-type">Горячие клавиши</div>
+                      <h3>Управление с клавиатуры</h3>
+                      <p>
+                        Переназначьте основные команды под себя. Новые сочетания не мешают раскладке и применяются после сохранения.
+                      </p>
+                    </div>
+                    <div class="settings-badge">8 команд</div>
+                  </div>
+
+                  <div id="settingsHotkeysList" class="hotkeys-list"></div>
+
+                  <div class="settings-actions hotkeys-actions">
+                    <button id="hotkeysSaveBtn" class="primary-btn" type="button">Сохранить хоткеи</button>
+                    <button id="hotkeysResetBtn" class="secondary-btn" type="button">Сбросить по умолчанию</button>
+                  </div>
+
+                  <div id="hotkeysStatus" class="settings-status">
+                    Нажмите «Изменить», затем нужное сочетание клавиш. После сохранения оно сразу станет активным в клиенте.
+                  </div>
+                </section>
+              </div>
 
               <aside class="glass-panel settings-help-panel">
                 <div class="focus-cover large settings-proxy-cover">
@@ -402,6 +435,9 @@
                   Сервер помогает приложению выполнять поиск, открывать профили артистов, плейлисты и альбомы. Если вы не знаете,
                   что вводить в поля выше, попросите адрес сервера и ключ доступа у автора клиента.
                 </p>
+                <div class="settings-help-actions">
+                  <button id="restoreHomeHeroBtn" class="text-btn" type="button">Вернуть приветственный блок</button>
+                </div>
               </aside>
             </div>
           </section>
@@ -531,6 +567,65 @@
           <button id="modalConfirmBtn" class="primary-btn">Подтвердить</button>
         </div>
       </div>
+    </div>
+
+    <div id="onboardingOverlay" class="onboarding-overlay hidden">
+      <section class="onboarding-card" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
+        <div class="onboarding-copy">
+          <div class="onboarding-kicker">Обновленный ритм</div>
+          <h2 id="onboardingTitle">Первые минуты в клиенте должны быть быстрыми и понятными.</h2>
+          <p class="onboarding-text">
+            Теперь поиск, очередь и управление воспроизведением доступны почти без мыши.
+            Заодно интерфейс стал компактнее и аккуратнее на небольших экранах ноутбуков.
+          </p>
+
+          <div class="onboarding-grid">
+            <article class="onboarding-step">
+              <span class="onboarding-step-index">01</span>
+              <h3>Быстрый поиск</h3>
+              <p>Используй <strong>Ctrl/⌘+K</strong> или <strong>/</strong>, чтобы моментально перейти к поиску.</p>
+            </article>
+            <article class="onboarding-step">
+              <span class="onboarding-step-index">02</span>
+              <h3>Управление на лету</h3>
+              <p><strong>Space</strong> ставит на паузу и запускает, <strong>Q</strong> открывает очередь, <strong>F</strong> разворачивает плеер.</p>
+            </article>
+            <article class="onboarding-step">
+              <span class="onboarding-step-index">03</span>
+              <h3>Все под рукой</h3>
+              <p>Избранное, локальные плейлисты и настройки прокси остаются рядом, но не перегружают экран.</p>
+            </article>
+          </div>
+
+          <div class="onboarding-actions">
+            <button id="onboardingStartBtn" class="primary-btn" type="button">Начать слушать</button>
+            <button id="onboardingSearchBtn" class="secondary-btn" type="button">Открыть поиск</button>
+            <button id="onboardingSettingsBtn" class="secondary-btn" type="button">Открыть настройки</button>
+          </div>
+        </div>
+
+        <aside class="onboarding-side">
+          <div class="onboarding-panel">
+            <div class="focus-type">Горячие клавиши</div>
+            <div class="onboarding-shortcut-list">
+              <div class="shortcut-pill"><span class="shortcut-key" data-hotkey-display="playPause">Space</span><span>Пауза / старт</span></div>
+              <div class="shortcut-pill"><span class="shortcut-key" data-hotkey-display="nextTrack">Shift + Right</span><span>Следующий трек</span></div>
+              <div class="shortcut-pill"><span class="shortcut-key" data-hotkey-display="previousTrack">Shift + Left</span><span>Предыдущий трек</span></div>
+              <div class="shortcut-pill"><span class="shortcut-key" data-hotkey-display="mute">M</span><span>Отключить звук</span></div>
+              <div class="shortcut-pill"><span class="shortcut-key" data-hotkey-display="like">L</span><span>Лайк текущему треку</span></div>
+              <div class="shortcut-pill"><span class="shortcut-key">Esc</span><span>Закрыть панель</span></div>
+            </div>
+          </div>
+
+          <div class="onboarding-panel onboarding-note">
+            <div class="focus-type">Что изменилось</div>
+            <p class="onboarding-text compact">
+              Пауза стала мягче, интерфейс плотнее на компактных экранах, а плеер заметнее без потери очереди.
+            </p>
+            <button id="onboardingSkipBtn" class="text-btn onboarding-skip" type="button">Пропустить</button>
+          </div>
+        </aside>
+      </section>
     </div>
 
     <audio id="audioPlayer" preload="auto"></audio>

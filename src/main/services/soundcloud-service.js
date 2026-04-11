@@ -492,7 +492,7 @@ class SoundCloudService {
   normalizeProxyCollection(info = {}) {
     const tracks = this.normalizeTrackList(info.tracks || info.entries || []);
     const normalized = this.normalizePlaylist(info, {
-      kind: info.kind || (info.is_album ? 'album' : undefined),
+      kind: info.kind === 'album' ? 'album' : undefined,
     });
 
     return {
@@ -503,24 +503,61 @@ class SoundCloudService {
     };
   }
 
+  collectProxyCollections(data = {}) {
+    return [
+      ...(Array.isArray(data.playlists) ? data.playlists : []),
+      ...(Array.isArray(data.albums) ? data.albums : []),
+      ...(Array.isArray(data.collections) ? data.collections : []),
+      ...(Array.isArray(data.sets) ? data.sets : []),
+    ];
+  }
+
+  splitProxyCollections(items = [], limit = 10) {
+    const safeLimit = Math.min(Math.max(Number(limit || 10), 1), 100);
+    const playlists = [];
+    const albums = [];
+    const seen = new Set();
+
+    items.forEach((item) => {
+      const normalized = this.normalizeProxyCollection(item);
+      const key = normalized.id || normalized.webpage_url || `${normalized.title}:${normalized.uploader}`;
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+
+      if (normalized.kind === 'album') {
+        albums.push(normalized);
+        return;
+      }
+
+      playlists.push(normalized);
+    });
+
+    return {
+      playlists: playlists.slice(0, safeLimit),
+      albums: albums.slice(0, safeLimit),
+    };
+  }
+
   normalizeProxySearchPayload(data = {}, limit = 10) {
+    const collections = this.splitProxyCollections(this.collectProxyCollections(data), limit);
     return {
       tracks: this.normalizeTrackList(data.tracks || []).slice(0, limit),
-      playlists: (data.playlists || []).map((item) => this.normalizeProxyCollection(item)).filter((item) => item.id).slice(0, limit),
-      albums: (data.albums || []).map((item) => this.normalizeProxyCollection(item)).filter((item) => item.id).slice(0, limit),
-      artists: (data.artists || []).map((item) => this.normalizeArtist(item)).filter((item) => item.id).slice(0, limit),
+      playlists: collections.playlists,
+      albums: collections.albums,
+      artists: (data.artists || []).map((item) => this.normalizeArtist(item)).filter((item) => item.id || item.webpage_url).slice(0, limit),
     };
   }
 
   normalizeProxyArtistProfile(data = {}, options = {}) {
     const trackLimit = Math.min(Math.max(Number(options.trackLimit || 25), 1), 100);
     const collectionLimit = Math.min(Math.max(Number(options.collectionLimit || 25), 1), 50);
+    const collections = this.splitProxyCollections(this.collectProxyCollections(data), collectionLimit);
 
     return {
       ...this.normalizeArtist(data),
       tracks: this.normalizeTrackList(data.tracks || []).slice(0, trackLimit),
-      playlists: (data.playlists || []).map((item) => this.normalizeProxyCollection(item)).filter((item) => item.id).slice(0, collectionLimit),
-      albums: (data.albums || []).map((item) => this.normalizeProxyCollection(item)).filter((item) => item.id).slice(0, collectionLimit),
+      playlists: collections.playlists,
+      albums: collections.albums,
     };
   }
 
@@ -551,7 +588,10 @@ class SoundCloudService {
   }
 
   isAlbumPlaylist(info) {
-    return Boolean(info?.is_album || info?.set_type === 'album' || info?.display_date_type === 'album');
+    const source = info?.raw?.raw || info?.raw || info || {};
+    const setType = String(info?.set_type || source?.set_type || '').toLowerCase();
+    const displayDateType = String(info?.display_date_type || source?.display_date_type || '').toLowerCase();
+    return Boolean(info?.is_album || source?.is_album || setType === 'album' || displayDateType === 'album');
   }
 
   inferCollectionKind(info) {
@@ -565,6 +605,7 @@ class SoundCloudService {
   }
 
   looksLikeAlbum(info) {
+    const source = info?.raw?.raw || info?.raw || info || {};
     const tracks = Array.isArray(info?.tracks) ? info.tracks.filter(Boolean) : [];
     if (tracks.length < 2) {
       return false;
@@ -575,17 +616,33 @@ class SoundCloudService {
       return false;
     }
 
-    const ownerId = String(info?.user?.id || '');
+    const ownerId = String(info?.user?.id || source?.user?.id || '');
     const ownedTracks = ownerId
-      ? tracks.filter((track) => String(track?.user?.id || '') === ownerId).length
+      ? tracks.filter((track) => {
+        const trackSource = track?.raw?.raw || track?.raw || track || {};
+        return String(track?.user?.id || trackSource?.user?.id || '') === ownerId;
+      }).length
       : 0;
     const ownedRatio = ownedTracks / tracks.length;
 
-    const hasPlaylistReleaseDate = Boolean(info?.release_year || info?.release_month || info?.release_day);
+    const hasPlaylistReleaseDate = Boolean(
+      info?.release_year ||
+      info?.release_month ||
+      info?.release_day ||
+      source?.release_year ||
+      source?.release_month ||
+      source?.release_day
+    );
     const tracksWithReleaseDate = tracks.filter((track) => (
       track?.release_year ||
       track?.release_month ||
-      track?.release_day
+      track?.release_day ||
+      track?.raw?.release_year ||
+      track?.raw?.release_month ||
+      track?.raw?.release_day ||
+      track?.raw?.raw?.release_year ||
+      track?.raw?.raw?.release_month ||
+      track?.raw?.raw?.release_day
     )).length;
     const hasTrackReleaseSignal = tracksWithReleaseDate >= Math.max(2, Math.ceil(tracks.length * 0.6));
     const hasTitleSignal = /\b(album|lp|ep)\b/i.test(title);

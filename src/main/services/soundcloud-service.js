@@ -433,27 +433,83 @@ class SoundCloudService {
     return duration;
   }
 
+  unwrapTrackPayload(info) {
+    if (!info || typeof info !== 'object' || Array.isArray(info)) {
+      return info;
+    }
+
+    if (info.track && typeof info.track === 'object' && !Array.isArray(info.track)) {
+      return info.track;
+    }
+
+    return info;
+  }
+
+  trackNeedsMetadataHydration(track = {}) {
+    const title = String(track.title || '').trim();
+    const uploader = String(track.uploader || track.artist || '').trim();
+    return Boolean(
+      track?.webpage_url &&
+      (
+        !title ||
+        title === 'Без названия' ||
+        !uploader ||
+        uploader === 'Неизвестный артист' ||
+        !track?.thumbnail
+      )
+    );
+  }
+
+  async hydrateTracksMetadata(tracks = []) {
+    const normalizedTracks = this.normalizeTrackList(tracks);
+
+    const hydrated = await Promise.all(normalizedTracks.map(async (track) => {
+      if (!this.trackNeedsMetadataHydration(track)) {
+        return track;
+      }
+
+      try {
+        const resolved = await this.resolveUrl(track.webpage_url);
+        if (resolved?.kind === 'track' && resolved.track) {
+          return this.normalizeTrack({
+            ...track,
+            ...resolved.track,
+          });
+        }
+      } catch {}
+
+      return track;
+    }));
+
+    return this.normalizeTrackList(hydrated);
+  }
+
   normalizeTrack(info) {
-    const artwork = info.thumbnail || info.artwork_url || info.user?.avatar_url || '';
+    const source = this.unwrapTrackPayload(info) || {};
+    const artwork = source.thumbnail || source.artwork_url || source.user?.avatar_url || '';
     return {
-      id: String(info.id || ''),
+      id: String(source.id || info?.id || ''),
       title: info.title || 'Без названия',
       uploader:
-        info.uploader ||
-        info.artist ||
-        info.user?.username ||
-        info.publisher_metadata?.artist ||
+        source.uploader ||
+        source.artist ||
+        source.user?.username ||
+        source.user?.full_name ||
+        source.publisher_metadata?.artist ||
         'Неизвестный артист',
-      duration: this.normalizeDuration(info.duration || info.full_duration),
+      title: source.title || info.title || 'Без названия',
+      uploader: source.uploader || source.artist || source.user?.username || source.user?.full_name || info?.uploader || info?.artist || 'Неизвестный артист',
+      duration: this.normalizeDuration(source.duration || source.full_duration),
       thumbnail: artwork ? artwork.replace('-large', '-t500x500') : '',
-      webpage_url: info.webpage_url || info.permalink_url || info.original_url || '',
-      stream_url: info.url || '',
-      description: info.description || '',
-      genre: info.genre || '',
-      view_count: Number(info.view_count || info.playback_count || 0),
-      like_count: Number(info.like_count || info.favoritings_count || info.likes_count || 0),
+      webpage_url: source.webpage_url || source.permalink_url || source.original_url || '',
+      stream_url: source.url || '',
+      description: source.description || '',
+      genre: source.genre || '',
+      view_count: Number(source.view_count || source.playback_count || 0),
+      like_count: Number(source.like_count || source.favoritings_count || source.likes_count || 0),
+      artist_id: String(source.artist_id || source.user?.id || ''),
       kind: 'track',
-      raw: info,
+      raw: source.raw || source,
     };
   }
 
@@ -550,7 +606,7 @@ class SoundCloudService {
 
   normalizeProxyArtistProfile(data = {}, options = {}) {
     const trackLimit = Math.min(Math.max(Number(options.trackLimit || 25), 1), 100);
-    const collectionLimit = Math.min(Math.max(Number(options.collectionLimit || 25), 1), 50);
+    const collectionLimit = Math.min(Math.max(Number(options.collectionLimit || 25), 1), 100);
     const collections = this.splitProxyCollections(this.collectProxyCollections(data), collectionLimit);
 
     return {
@@ -558,6 +614,22 @@ class SoundCloudService {
       tracks: this.normalizeTrackList(data.tracks || []).slice(0, trackLimit),
       playlists: collections.playlists,
       albums: collections.albums,
+    };
+  }
+
+  normalizeProxyProfileImportPayload(data = {}) {
+    const profile = this.normalizeArtist(data.profile || data.artist || {});
+    const playlists = (Array.isArray(data.playlists) ? data.playlists : [])
+      .map((item) => this.normalizeProxyCollection(item))
+      .filter((item) => item?.kind === 'playlist');
+
+    return {
+      profile: {
+        ...profile,
+        kind: 'artist',
+      },
+      likes: this.normalizeTrackList(data.likes || data.tracks || []),
+      playlists,
     };
   }
 
@@ -788,7 +860,7 @@ class SoundCloudService {
 
   async getArtistProfile(artistId, options = {}) {
     const trackLimit = Math.min(Math.max(Number(options.trackLimit || 25), 1), 100);
-    const collectionLimit = Math.min(Math.max(Number(options.collectionLimit || 25), 1), 50);
+    const collectionLimit = Math.min(Math.max(Number(options.collectionLimit || 25), 1), 100);
     const normalizedArtistId = String(artistId || '').trim();
     const cacheKey = `${normalizedArtistId}:${trackLimit}:${collectionLimit}`;
 
@@ -941,6 +1013,480 @@ class SoundCloudService {
       });
     });
     return items;
+  }
+
+  normalizeProfileUrl(value) {
+    const raw = String(value || '').trim();
+    if (!raw) {
+      throw new Error('Укажите ссылку на профиль SoundCloud');
+    }
+
+    let url;
+    try {
+      url = new URL(raw);
+    } catch {
+      throw new Error('Ссылка на профиль SoundCloud выглядит некорректно');
+    }
+
+    if (!/soundcloud\.com$/i.test(url.hostname)) {
+      throw new Error('Нужна ссылка вида https://soundcloud.com/username');
+    }
+
+    const segments = url.pathname.split('/').filter(Boolean);
+    if (!segments.length) {
+      throw new Error('Не удалось определить профиль SoundCloud по этой ссылке');
+    }
+
+    const root = String(segments[0] || '').toLowerCase();
+    const reserved = new Set([
+      'discover',
+      'search',
+      'stream',
+      'upload',
+      'you',
+      'charts',
+      'stations',
+      'genres',
+      'people',
+      'terms-of-use',
+      'privacy',
+    ]);
+
+    if (reserved.has(root)) {
+      throw new Error('Нужна прямая ссылка именно на профиль пользователя SoundCloud');
+    }
+
+    return `${url.origin}/${segments[0]}`;
+  }
+
+  parseProfileArtist(html, fallbackUrl = '') {
+    const hydration = this.extractHydration(html);
+    const candidates = [];
+    const seen = new Set();
+
+    const pushCandidate = (value) => {
+      if (!value || value.kind !== 'user') return;
+      const normalized = this.normalizeArtist({
+        ...value,
+        permalink_url: value.permalink_url || fallbackUrl,
+      });
+      const key = normalized.id || normalized.webpage_url || normalized.title;
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      candidates.push(normalized);
+    };
+
+    hydration.forEach((entry) => {
+      pushCandidate(entry?.data);
+      pushCandidate(entry?.data?.user);
+
+      const collection = entry?.data?.collection;
+      if (Array.isArray(collection)) {
+        collection.forEach(pushCandidate);
+      }
+    });
+
+    return candidates[0] || null;
+  }
+
+  isTrackImportCandidate(entry) {
+    const candidate = this.unwrapTrackPayload(entry);
+    if (!candidate) return false;
+    if (entry?._type === 'url') return false;
+    if (candidate?._type === 'url') return false;
+
+    const kind = String(candidate.kind || candidate?._type || '').toLowerCase();
+    if (kind === 'playlist' || kind === 'album' || kind === 'user' || kind === 'artist') {
+      return false;
+    }
+
+    if (candidate.tracks || candidate.track_count) {
+      return false;
+    }
+
+    const hasLink = Boolean(candidate.webpage_url || candidate.permalink_url || candidate.original_url);
+    const hasAuthor = Boolean(candidate.user?.username || candidate.user?.full_name || candidate.artist || candidate.uploader);
+    const hasMedia = Boolean(candidate.duration || candidate.full_duration || candidate.media || candidate.streamable || candidate.artwork_url || candidate.thumbnail);
+    const hasTitle = Boolean(String(candidate.title || '').trim());
+
+    if (!candidate.id) {
+      return false;
+    }
+
+    return Boolean(
+      hasLink ||
+      (hasTitle && hasAuthor) ||
+      (hasTitle && hasMedia)
+    );
+  }
+
+  extractLikedTracks(entries = []) {
+    const tracks = [];
+    const visited = new WeakSet();
+
+    const visit = (value) => {
+      if (!value) return;
+
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+
+      if (typeof value !== 'object') {
+        return;
+      }
+
+      if (visited.has(value)) {
+        return;
+      }
+      visited.add(value);
+
+      const candidate = this.unwrapTrackPayload(value);
+      if (this.isTrackImportCandidate(candidate)) {
+        tracks.push(candidate);
+      }
+
+      Object.values(value).forEach(visit);
+    };
+
+    visit(entries);
+    return this.normalizeTrackList(tracks);
+  }
+
+  parseProfilePlaylists(html) {
+    const hydration = this.extractHydration(html);
+    const playlists = [];
+    const seen = new Set();
+    const visited = new WeakSet();
+
+    const visit = (value) => {
+      if (!value) return;
+
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+
+      if (typeof value !== 'object') {
+        return;
+      }
+
+      if (visited.has(value)) {
+        return;
+      }
+      visited.add(value);
+
+      if (value.kind === 'playlist') {
+        const normalized = this.normalizePlaylist(value);
+        if (normalized.kind === 'playlist') {
+          const key = normalized.id || normalized.webpage_url || normalized.title;
+          if (key && !seen.has(key)) {
+            seen.add(key);
+            playlists.push(normalized);
+          }
+        }
+      }
+
+      Object.values(value).forEach(visit);
+    };
+
+    visit(hydration);
+
+    return playlists;
+  }
+
+  extractTracksFromResolvedResource(resource) {
+    if (!resource) return [];
+
+    if (resource.kind === 'track' && resource.track) {
+      return this.normalizeTrackList([resource.track]);
+    }
+
+    if (Array.isArray(resource.tracks) || Array.isArray(resource.entries)) {
+      return this.extractLikedTracks(resource.tracks || resource.entries || []);
+    }
+
+    return this.extractLikedTracks(resource);
+  }
+
+  dedupeCollections(collections = []) {
+    const seen = new Set();
+    const result = [];
+
+    collections.forEach((item) => {
+      if (!item) return;
+      const key = item.id || item.webpage_url || item.title;
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      result.push(item);
+    });
+
+    return result;
+  }
+
+  async resolveProfileArtist(profileUrl) {
+    const normalizedUrl = this.normalizeProfileUrl(profileUrl);
+
+    try {
+      const resolved = await this.resolveUrl(normalizedUrl);
+      if (resolved?.kind === 'artist' && resolved.id) {
+        return {
+          profileUrl: normalizedUrl,
+          artist: {
+            ...resolved,
+            webpage_url: resolved.webpage_url || normalizedUrl,
+          },
+        };
+      }
+    } catch {}
+
+    const html = await this.fetchHtml(normalizedUrl);
+    const artist = this.parseProfileArtist(html, normalizedUrl);
+    if (!artist?.id) {
+      throw new Error('Не удалось определить профиль SoundCloud для импорта');
+    }
+
+    return {
+      profileUrl: normalizedUrl,
+      artist: {
+        ...artist,
+        webpage_url: artist.webpage_url || normalizedUrl,
+      },
+    };
+  }
+
+  async getProfileLikes(profileUrl, artistId = '') {
+    const likesUrl = `${profileUrl.replace(/\/+$/, '')}/likes`;
+
+    try {
+      const html = await this.fetchHtml(likesUrl);
+      const hydratedTracks = this.extractLikedTracks(this.extractHydration(html));
+      if (hydratedTracks.length) {
+        return this.hydrateTracksMetadata(hydratedTracks);
+      }
+    } catch {}
+
+    try {
+      const resolved = await this.resolveUrl(likesUrl);
+      const resolvedTracks = this.extractTracksFromResolvedResource(resolved);
+      if (resolvedTracks.length) {
+        return this.hydrateTracksMetadata(resolvedTracks);
+      }
+    } catch {}
+
+    if (artistId && this.hasOfficialApiConfig()) {
+      try {
+        const data = await this.apiGet(`/users/${encodeURIComponent(String(artistId))}/likes/tracks`, {
+          access: 'playable,preview,blocked',
+          limit: 200,
+        });
+        const apiTracks = this.extractLikedTracks(this.unwrapCollection(data));
+        if (apiTracks.length) {
+          return this.hydrateTracksMetadata(apiTracks);
+        }
+      } catch {}
+    }
+
+    const data = await this.extractInfo(likesUrl, [], { allowPlaylist: true });
+    const entries = Array.isArray(data?.entries)
+      ? data.entries
+      : Array.isArray(data?.tracks)
+        ? data.tracks
+        : this.unwrapCollection(data);
+    const extractedTracks = this.extractLikedTracks(entries);
+    if (extractedTracks.length) {
+      return this.hydrateTracksMetadata(extractedTracks);
+    }
+
+    throw new Error('Не удалось получить открытые лайки этого профиля');
+  }
+
+  async getProfilePlaylists(profileUrl, artistId) {
+    try {
+      const artist = await this.getArtistProfile(artistId, {
+        trackLimit: 1,
+        collectionLimit: 100,
+      });
+
+      const collections = await Promise.all(
+        (artist.playlists || []).map(async (playlist) => {
+          try {
+            return await this.getCollectionById(playlist.id);
+          } catch {
+            return playlist;
+          }
+        })
+      );
+
+      return this.dedupeCollections(collections.filter((item) => item?.kind === 'playlist'));
+    } catch {
+      const html = await this.fetchHtml(`${profileUrl.replace(/\/+$/, '')}/sets`);
+      const parsed = this.parseProfilePlaylists(html);
+      const collections = await Promise.all(
+        parsed.map(async (playlist) => {
+          try {
+            return await this.getCollectionById(playlist.id);
+          } catch {
+            return playlist;
+          }
+        })
+      );
+      return this.dedupeCollections(collections.filter((item) => item?.kind === 'playlist'));
+    }
+  }
+
+  async importProfileLibrary(profileUrl, options = {}, reportProgress = null) {
+    const notify = async (payload = {}) => {
+      if (typeof reportProgress !== 'function') return;
+      await Promise.resolve(reportProgress(payload));
+    };
+
+    const importMode = String(options.importMode || 'both').toLowerCase();
+    const favoritesMode = String(options.favoritesMode || 'append').toLowerCase();
+    const shouldImportLikes = importMode === 'likes' || importMode === 'both';
+    const shouldImportPlaylists = importMode === 'playlists' || importMode === 'both';
+
+    if (!shouldImportLikes && !shouldImportPlaylists) {
+      throw new Error('Выберите, что нужно импортировать из профиля');
+    }
+
+    await notify({
+      stage: 'resolve',
+      progress: 12,
+      message: 'Определяем профиль SoundCloud...',
+    });
+
+    const normalizedProfileUrl = this.normalizeProfileUrl(profileUrl);
+
+    if (this.hasProxyConfig()) {
+      await notify({
+        stage: 'proxy-fetch',
+        progress: 24,
+        message: shouldImportLikes && shouldImportPlaylists
+          ? 'Загружаем лайки и плейлисты через сервер...'
+          : shouldImportLikes
+            ? 'Загружаем лайки через сервер...'
+            : 'Загружаем плейлисты через сервер...',
+      });
+
+      const proxyData = await this.proxyGet('/api/profile-import', {
+        url: normalizedProfileUrl,
+        importMode,
+        likesLimit: 1000,
+        playlistLimit: 100,
+      });
+      const proxyPayload = this.normalizeProxyProfileImportPayload(proxyData);
+      const artist = proxyPayload.profile || {};
+      const likes = shouldImportLikes ? proxyPayload.likes : [];
+      const playlists = shouldImportPlaylists ? proxyPayload.playlists : [];
+
+      await notify({
+        stage: 'profile',
+        progress: 40,
+        message: `Профиль найден: ${artist.title || artist.uploader || 'SoundCloud'}`,
+      });
+
+      if (shouldImportLikes) {
+        await notify({
+          stage: 'likes-ready',
+          progress: shouldImportPlaylists ? 62 : 84,
+          message: likes.length
+            ? `Найдено лайков: ${likes.length}`
+            : 'Открытые лайки не найдены',
+        });
+      }
+
+      if (shouldImportPlaylists) {
+        await notify({
+          stage: 'playlists-ready',
+          progress: shouldImportLikes ? 82 : 76,
+          message: playlists.length
+            ? `Найдено плейлистов: ${playlists.length}`
+            : 'Публичные плейлисты не найдены',
+        });
+      }
+
+      await notify({
+        stage: 'prepare-save',
+        progress: 90,
+        message: 'Подготавливаем сохранение в библиотеку...',
+      });
+
+      return {
+        profile: {
+          id: String(artist.id || ''),
+          title: artist.title || artist.uploader || 'SoundCloud',
+          webpage_url: artist.webpage_url || normalizedProfileUrl,
+          thumbnail: artist.thumbnail || '',
+        },
+        importMode,
+        favoritesMode: favoritesMode === 'replace' ? 'replace' : 'append',
+        likes,
+        playlists,
+      };
+    }
+
+    const { artist, profileUrl: resolvedProfileUrl } = await this.resolveProfileArtist(normalizedProfileUrl);
+
+    await notify({
+      stage: 'profile',
+      progress: 24,
+      message: `Профиль найден: ${artist.title || artist.uploader || 'SoundCloud'}`,
+    });
+
+    let likes = [];
+    let playlists = [];
+
+    if (shouldImportLikes) {
+      await notify({
+        stage: 'likes',
+        progress: shouldImportPlaylists ? 38 : 60,
+        message: 'Загружаем открытые лайки...',
+      });
+      likes = await this.getProfileLikes(resolvedProfileUrl, artist.id);
+      await notify({
+        stage: 'likes-ready',
+        progress: shouldImportPlaylists ? 56 : 84,
+        message: likes.length
+          ? `Найдено лайков: ${likes.length}`
+          : 'Открытые лайки не найдены',
+      });
+    }
+
+    if (shouldImportPlaylists) {
+      await notify({
+        stage: 'playlists',
+        progress: shouldImportLikes ? 66 : 48,
+        message: 'Загружаем публичные плейлисты...',
+      });
+      playlists = await this.getProfilePlaylists(resolvedProfileUrl, artist.id);
+      await notify({
+        stage: 'playlists-ready',
+        progress: shouldImportLikes ? 84 : 78,
+        message: playlists.length
+          ? `Найдено плейлистов: ${playlists.length}`
+          : 'Публичные плейлисты не найдены',
+      });
+    }
+
+    await notify({
+      stage: 'prepare-save',
+      progress: 90,
+      message: 'Подготавливаем сохранение в библиотеку...',
+    });
+
+    return {
+      profile: {
+        id: String(artist.id || ''),
+        title: artist.title || artist.uploader || 'SoundCloud',
+          webpage_url: artist.webpage_url || resolvedProfileUrl,
+        thumbnail: artist.thumbnail || '',
+      },
+      importMode,
+      favoritesMode: favoritesMode === 'replace' ? 'replace' : 'append',
+      likes,
+      playlists,
+    };
   }
 
   async legacySearchAll(query, limit = 10) {

@@ -36,6 +36,10 @@ const state = {
   playerMuted: false,
   onboardingOpen: false,
   heroDismissed: false,
+  homeMixes: [],
+  homeMixesGeneratedAt: 0,
+  homeMixesSourceSignature: "",
+  homeMixesLoading: false,
   hotkeys: {},
   hotkeysDraft: {},
   hotkeysDirty: false,
@@ -51,6 +55,9 @@ const state = {
 const UI_STORAGE_KEY = "soundcloud.desktop.ui.v2";
 const ONBOARDING_VERSION = 1;
 const AUDIO_FADE_DURATION_MS = 180;
+const HOME_MIX_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
+const HOME_MIX_TRACK_LIMIT = 12;
+const HOME_MIX_PREVIEW_LIMIT = 3;
 const HOTKEY_ACTIONS = Object.freeze([
   {
     id: "search",
@@ -179,6 +186,9 @@ const el = {
   heroRecentCount: document.getElementById("heroRecentCount"),
   heroFavoritesCount: document.getElementById("heroFavoritesCount"),
   heroPlaylistCount: document.getElementById("heroPlaylistCount"),
+  homeMixesGrid: document.getElementById("homeMixesGrid"),
+  homeMixesMeta: document.getElementById("homeMixesMeta"),
+  refreshHomeMixesBtn: document.getElementById("refreshHomeMixesBtn"),
   homeHero: document.getElementById("homeHero"),
   homeHeroDismissBtn: document.getElementById("homeHeroDismissBtn"),
   heroSearchBtn: document.getElementById("heroSearchBtn"),
@@ -223,6 +233,7 @@ const el = {
   librarySectionText: document.querySelector("#page-library .section-head p"),
   libraryContentTitle: document.querySelector("#page-library .panel-head.spacing-top h3"),
   libraryContentText: document.querySelector("#page-library .panel-head.spacing-top p"),
+  importSoundcloudBtn: document.getElementById("importSoundcloudBtn"),
   refreshLibraryBtn: document.getElementById("refreshLibraryBtn"),
   favoritesList: document.getElementById("favoritesList"),
   playlistsList: document.getElementById("playlistsList"),
@@ -345,6 +356,9 @@ function loadUIState() {
   state.shuffle = Boolean(stored.shuffle);
   state.repeatMode = Math.max(0, Math.min(2, Number(stored.repeatMode || 0)));
   state.heroDismissed = Boolean(stored.heroDismissed);
+  state.homeMixes = normalizeStoredHomeMixes(stored.homeMixes);
+  state.homeMixesGeneratedAt = Math.max(0, Number(stored.homeMixesGeneratedAt || 0));
+  state.homeMixesSourceSignature = String(stored.homeMixesSourceSignature || "");
   state.hotkeys = normalizeHotkeysMap(stored.hotkeys);
   state.hotkeysDraft = cloneHotkeysMap(state.hotkeys);
   state.hotkeysDirty = false;
@@ -565,6 +579,319 @@ function handleHotkeyCapture(event) {
   return true;
 }
 
+function serializeMixTrack(item) {
+  if (!item) return null;
+  return {
+    id: item.id || item.track_id || "",
+    track_id: item.track_id || item.id || "",
+    kind: item.kind || "track",
+    title: item.title || "",
+    uploader: item.uploader || item.artist || "",
+    artist: item.artist || item.uploader || "",
+    webpage_url: item.webpage_url || "",
+    thumbnail: item.thumbnail || "",
+    duration: Number(item.duration || 0),
+    genre: item.genre || "",
+    likes_count: Number(item.likes_count || 0),
+    playback_count: Number(item.playback_count || 0),
+    reposts_count: Number(item.reposts_count || 0),
+    created_at: item.created_at || "",
+    description: item.description || "",
+    artist_id: item.artist_id || "",
+  };
+}
+
+function normalizeStoredHomeMixes(candidate) {
+  if (!Array.isArray(candidate)) return [];
+  return candidate
+    .map((mix) => ({
+      id: String(mix?.id || ""),
+      title: String(mix?.title || ""),
+      subtitle: String(mix?.subtitle || ""),
+      description: String(mix?.description || ""),
+      generatedAt: Math.max(0, Number(mix?.generatedAt || 0)),
+      tracks: Array.isArray(mix?.tracks)
+        ? mix.tracks.map(serializeMixTrack).filter((item) => item?.webpage_url)
+        : [],
+    }))
+    .filter((mix) => mix.id && mix.title && mix.tracks.length);
+}
+
+function persistHomeMixes() {
+  writeUIStorage({
+    homeMixes: state.homeMixes.map((mix) => ({
+      ...mix,
+      tracks: mix.tracks.map(serializeMixTrack),
+    })),
+    homeMixesGeneratedAt: state.homeMixesGeneratedAt,
+    homeMixesSourceSignature: state.homeMixesSourceSignature,
+  });
+}
+
+function buildHomeMixSourceSignature() {
+  const recentIds = recentTracks().slice(0, 18).map(getItemId).join("|");
+  const favoriteIdsJoined = favoriteTracks().slice(0, 18).map(getItemId).join("|");
+  const playlistMeta = state.playlists.map((playlist) => `${playlist.id}:${playlist.track_count || 0}`).join("|");
+  return `${recentIds}::${favoriteIdsJoined}::${playlistMeta}`;
+}
+
+function stringHash(value) {
+  let hash = 0;
+  const text = String(value || "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash << 5) - hash) + text.charCodeAt(index);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function seededUnit(value) {
+  return (stringHash(value) % 1000) / 1000;
+}
+
+function uniqueByItemId(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const id = getItemId(item);
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+function sampleArtistsFromTracks(tracks) {
+  const seen = new Set();
+  return tracks
+    .map((track) => getArtist(track))
+    .filter((artist) => {
+      if (!artist || seen.has(artist)) return false;
+      seen.add(artist);
+      return true;
+    })
+    .slice(0, 3);
+}
+
+function homeMixRelativeTime(timestamp) {
+  if (!timestamp) return "Только что";
+  const diffMs = Math.max(0, Date.now() - timestamp);
+  const diffMinutes = Math.round(diffMs / 60000);
+  if (diffMinutes < 2) return "Только что";
+  if (diffMinutes < 60) return `${diffMinutes} мин назад`;
+  const diffHours = Math.round(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours} ч назад`;
+  const diffDays = Math.round(diffHours / 24);
+  return `${diffDays} дн назад`;
+}
+
+async function getAllLocalPlaylistTracksForMixes() {
+  if (!state.playlists.length) {
+    return [];
+  }
+
+  const responses = await Promise.all(
+    state.playlists.map(async (playlist) => {
+      try {
+        const response = await window.soundcloudAPI.library.getPlaylistTracks(playlist.id);
+        return unwrapResponse(response, "Не удалось загрузить локальный плейлист")
+          .map(toDisplayTrack)
+          .filter((item) => item?.webpage_url);
+      } catch {
+        return [];
+      }
+    })
+  );
+
+  return responses.flat();
+}
+
+function buildHomeMixCandidatePool(playlistTracks) {
+  const recent = recentTracks();
+  const favorites = favoriteTracks();
+  const sourceTracks = uniqueByItemId([
+    ...recent,
+    ...favorites,
+    ...playlistTracks,
+    ...state.playlistTracks,
+  ]).filter((item) => isTrack(item) && item?.webpage_url);
+
+  const artistAffinity = new Map();
+  recent.slice(0, 24).forEach((track, index) => {
+    const artist = getArtist(track);
+    artistAffinity.set(artist, (artistAffinity.get(artist) || 0) + Math.max(1, 16 - index));
+  });
+  favorites.slice(0, 40).forEach((track) => {
+    const artist = getArtist(track);
+    artistAffinity.set(artist, (artistAffinity.get(artist) || 0) + 6);
+  });
+  playlistTracks.slice(0, 120).forEach((track) => {
+    const artist = getArtist(track);
+    artistAffinity.set(artist, (artistAffinity.get(artist) || 0) + 3);
+  });
+
+  const recentWeight = new Map();
+  recent.forEach((track, index) => {
+    recentWeight.set(getItemId(track), Math.max(1, 18 - index));
+  });
+
+  const favoriteWeight = new Map();
+  favorites.forEach((track, index) => {
+    favoriteWeight.set(getItemId(track), Math.max(4, 26 - Math.min(index, 18)));
+  });
+
+  const playlistWeight = new Map();
+  playlistTracks.forEach((track, index) => {
+    playlistWeight.set(getItemId(track), (playlistWeight.get(getItemId(track)) || 0) + Math.max(2, 14 - (index % 10)));
+  });
+
+  return sourceTracks.map((track) => {
+    const id = getItemId(track);
+    const artist = getArtist(track);
+    const trackSeed = `${id}:${buildHomeMixSourceSignature()}`;
+    return {
+      track: serializeMixTrack(track),
+      id,
+      artist,
+      recentWeight: recentWeight.get(id) || 0,
+      favoriteWeight: favoriteWeight.get(id) || 0,
+      playlistWeight: playlistWeight.get(id) || 0,
+      artistWeight: artistAffinity.get(artist) || 0,
+      popularityWeight: Math.min(10, Math.round(Number(track.playback_count || 0) / 5000)),
+      freshnessWeight: seededUnit(trackSeed),
+    };
+  });
+}
+
+function scoreHomeMixCandidate(candidate, mixId, seedSalt) {
+  const noveltyPenalty = candidate.recentWeight > 12 ? 6 : 0;
+  const seeded = candidate.freshnessWeight * 3.5;
+
+  if (mixId === "mix-1") {
+    return (candidate.recentWeight * 2.4) + (candidate.artistWeight * 1.1) + (candidate.playlistWeight * 0.8) + (candidate.favoriteWeight * 0.45) + seeded;
+  }
+
+  if (mixId === "mix-2") {
+    return (candidate.favoriteWeight * 2.2) + (candidate.artistWeight * 1.2) + (candidate.playlistWeight * 0.6) + (candidate.recentWeight * 0.5) + (candidate.popularityWeight * 0.4) + seeded - noveltyPenalty;
+  }
+
+  return (candidate.playlistWeight * 2.1) + (candidate.artistWeight * 1.0) + (candidate.favoriteWeight * 0.6) + (candidate.recentWeight * 0.55) + seededUnit(`${seedSalt}:${candidate.id}`) * 4;
+}
+
+function pickTracksForMix(candidates, { mixId, usedGlobalIds, seedSalt }) {
+  const ranked = [...candidates]
+    .map((candidate) => ({
+      ...candidate,
+      totalScore: scoreHomeMixCandidate(candidate, mixId, seedSalt) - (usedGlobalIds.has(candidate.id) ? 4 : 0),
+    }))
+    .sort((left, right) => right.totalScore - left.totalScore);
+
+  const picked = [];
+  const artistCounts = new Map();
+
+  ranked.forEach((candidate) => {
+    if (picked.length >= HOME_MIX_TRACK_LIMIT) {
+      return;
+    }
+
+    const artistCount = artistCounts.get(candidate.artist) || 0;
+    if (artistCount >= 2) {
+      return;
+    }
+
+    picked.push(candidate.track);
+    artistCounts.set(candidate.artist, artistCount + 1);
+    usedGlobalIds.add(candidate.id);
+  });
+
+  if (picked.length < Math.min(6, ranked.length)) {
+    ranked.forEach((candidate) => {
+      if (picked.length >= HOME_MIX_TRACK_LIMIT) {
+        return;
+      }
+      if (picked.some((track) => getItemId(track) === candidate.id)) {
+        return;
+      }
+      picked.push(candidate.track);
+    });
+  }
+
+  return picked;
+}
+
+function createHomeMixBlueprints() {
+  return [
+    {
+      id: "mix-1",
+      title: "Микс #1",
+      subtitle: "Опирается на недавние прослушивания",
+      description: "Ближе к тому, что уже звучало у тебя недавно, но без полного повтора очереди.",
+    },
+    {
+      id: "mix-2",
+      title: "Микс #2",
+      subtitle: "Собран вокруг любимых треков",
+      description: "Больше веса у избранного, артистов из лайков и треков, которые хорошо ложатся рядом.",
+    },
+    {
+      id: "mix-3",
+      title: "Микс #3",
+      subtitle: "Смешан из локальных плейлистов",
+      description: "Локальные плейлисты, пересечения артистов и треки, которые уже живут в твоей библиотеке.",
+    },
+  ];
+}
+
+function buildLocalHomeMixes(playlistTracks) {
+  const candidates = buildHomeMixCandidatePool(playlistTracks);
+  if (!candidates.length) {
+    return [];
+  }
+
+  const seedSalt = `${buildHomeMixSourceSignature()}:${Math.floor(Date.now() / HOME_MIX_CACHE_TTL_MS)}`;
+  const usedGlobalIds = new Set();
+
+  return createHomeMixBlueprints().map((mix) => {
+    const tracks = pickTracksForMix(candidates, {
+      mixId: mix.id,
+      usedGlobalIds,
+      seedSalt,
+    });
+
+    return {
+      ...mix,
+      generatedAt: Date.now(),
+      tracks,
+    };
+  }).filter((mix) => mix.tracks.length);
+}
+
+async function ensureHomeMixes(options = {}) {
+  const force = Boolean(options.force);
+  const sourceSignature = buildHomeMixSourceSignature();
+  const cacheFresh = (
+    !force &&
+    state.homeMixes.length >= 3 &&
+    (Date.now() - state.homeMixesGeneratedAt) < HOME_MIX_CACHE_TTL_MS
+  );
+
+  if (cacheFresh) {
+    return;
+  }
+
+  state.homeMixesLoading = true;
+  renderHome();
+
+  try {
+    const playlistTracks = await getAllLocalPlaylistTracksForMixes();
+    const mixes = buildLocalHomeMixes(playlistTracks);
+    state.homeMixes = mixes;
+    state.homeMixesGeneratedAt = Date.now();
+    state.homeMixesSourceSignature = sourceSignature;
+    persistHomeMixes();
+  } finally {
+    state.homeMixesLoading = false;
+  }
+}
+
 function isTypingTarget(target) {
   const element = target instanceof HTMLElement ? target : null;
   if (!element) return false;
@@ -681,6 +1008,15 @@ function trackWord(count) {
   if (mod10 === 1 && mod100 !== 11) return "трек";
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return "трека";
   return "треков";
+}
+
+function playlistWord(count) {
+  const value = Number(count || 0);
+  const mod10 = value % 10;
+  const mod100 = value % 100;
+  if (mod10 === 1 && mod100 !== 11) return "плейлист";
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return "плейлиста";
+  return "плейлистов";
 }
 
 function getArtist(item) {
@@ -831,7 +1167,15 @@ function pushToast(message, type = "info") {
   }, 3200);
 }
 
-function closeModal(result = null) {
+function closeModal(result = null, options = {}) {
+  if (!options.force && typeof modalContext?.canClose === "function" && !modalContext.canClose()) {
+    return;
+  }
+
+  try {
+    modalContext?.onClose?.();
+  } catch {}
+
   el.modalOverlay.classList.add("hidden");
   if (modalResolver) {
     modalResolver(result);
@@ -841,6 +1185,9 @@ function closeModal(result = null) {
   modalConfirmHandler = null;
   el.modalBody.innerHTML = "";
   el.modalConfirmBtn.onclick = null;
+  el.modalConfirmBtn.disabled = false;
+  el.modalCancelBtn.disabled = false;
+  el.modalCloseBtn.disabled = false;
 }
 
 function openModal({
@@ -852,7 +1199,7 @@ function openModal({
   onConfirm,
 }) {
   if (modalResolver) {
-    closeModal(null);
+    closeModal(null, { force: true });
   }
 
   el.modalTitle.textContent = title;
@@ -988,10 +1335,528 @@ async function choosePlaylist(playlists) {
   });
 }
 
+async function openSoundCloudImportModal() {
+  return openModal({
+    title: "Импорт из SoundCloud",
+    description: "Вставьте ссылку на профиль и выберите, что нужно перенести в клиент. Локальные плейлисты не перезаписываются.",
+    confirmText: "Импортировать",
+    renderBody: () => {
+      let importMode = "both";
+      let favoritesMode = "append";
+
+      const root = document.createElement("div");
+      root.className = "modal-form";
+
+      const urlSection = document.createElement("div");
+      urlSection.className = "modal-form-section";
+
+      const urlLabel = document.createElement("label");
+      urlLabel.className = "modal-form-label";
+      urlLabel.textContent = "Ссылка на профиль";
+
+      const input = document.createElement("input");
+      input.type = "url";
+      input.placeholder = "https://soundcloud.com/username";
+      input.autocomplete = "off";
+      input.spellcheck = false;
+
+      urlSection.appendChild(urlLabel);
+      urlSection.appendChild(input);
+
+      const createOptionSection = ({ title, description, options, initialValue, onChange }) => {
+        let currentValue = initialValue;
+        const section = document.createElement("section");
+        section.className = "modal-form-section";
+
+        const titleNode = document.createElement("div");
+        titleNode.className = "modal-form-label";
+        titleNode.textContent = title;
+
+        const descriptionNode = document.createElement("p");
+        descriptionNode.className = "modal-form-hint";
+        descriptionNode.textContent = description;
+
+        const grid = document.createElement("div");
+        grid.className = "modal-options-grid";
+
+        const buttons = options.map((option) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "modal-option-card";
+          button.dataset.value = option.value;
+
+          const titleText = document.createElement("strong");
+          titleText.textContent = option.label;
+
+          const subtitleText = document.createElement("span");
+          subtitleText.textContent = option.description;
+
+          button.appendChild(titleText);
+          button.appendChild(subtitleText);
+          button.addEventListener("click", () => {
+            if (button.disabled) return;
+            currentValue = option.value;
+            sync();
+            onChange?.(currentValue);
+          });
+
+          grid.appendChild(button);
+          return button;
+        });
+
+        const sync = () => {
+          buttons.forEach((button) => {
+            button.classList.toggle("selected", button.dataset.value === currentValue);
+          });
+        };
+
+        section.appendChild(titleNode);
+        section.appendChild(descriptionNode);
+        section.appendChild(grid);
+        sync();
+
+        return {
+          element: section,
+          setDisabled: (disabled, hintText = "") => {
+            section.classList.toggle("disabled", disabled);
+            buttons.forEach((button) => {
+              button.disabled = disabled;
+            });
+            if (hintText) {
+              descriptionNode.textContent = hintText;
+            } else {
+              descriptionNode.textContent = description;
+            }
+          },
+          getValue: () => currentValue,
+        };
+      };
+
+      const importModeSection = createOptionSection({
+        title: "Что импортировать",
+        description: "Можно перенести лайки, публичные плейлисты или сразу оба блока.",
+        initialValue: importMode,
+        onChange: (value) => {
+          importMode = value;
+          const playlistsOnly = value === "playlists";
+          favoritesModeSection.setDisabled(
+            playlistsOnly,
+            playlistsOnly
+              ? "Этот режим нужен только при импорте лайков."
+              : "Выберите, нужно ли добавить импортированные лайки к текущему избранному или заменить его."
+          );
+        },
+        options: [
+          { value: "likes", label: "Только лайки", description: "Импортировать понравившиеся треки в избранное." },
+          { value: "playlists", label: "Только плейлисты", description: "Создать или обновить локальные копии публичных плейлистов." },
+          { value: "both", label: "Лайки и плейлисты", description: "Перенести и избранное, и публичные подборки профиля." },
+        ],
+      });
+
+      const favoritesModeSection = createOptionSection({
+        title: "Как обработать избранное",
+        description: "Выберите, нужно ли добавить импортированные лайки к текущему избранному или заменить его.",
+        initialValue: favoritesMode,
+        onChange: (value) => {
+          favoritesMode = value;
+        },
+        options: [
+          { value: "append", label: "Добавить к текущему", description: "Импортированные лайки просто дополнят уже сохраненные треки." },
+          { value: "replace", label: "Перезаписать избранное", description: "В избранном останутся только лайки из выбранного профиля." },
+        ],
+      });
+
+      const note = document.createElement("div");
+      note.className = "modal-note";
+      note.textContent = "Локальные плейлисты не затираются. SoundCloud-плейлисты импортируются отдельно и при повторном импорте обновляются только их копии.";
+
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          el.modalConfirmBtn.click();
+        }
+      });
+
+      root.appendChild(urlSection);
+      root.appendChild(importModeSection.element);
+      root.appendChild(favoritesModeSection.element);
+      root.appendChild(note);
+
+      return {
+        element: root,
+        input,
+        getValues: () => ({
+          profileUrl: input.value.trim(),
+          importMode: importModeSection.getValue(),
+          favoritesMode: favoritesModeSection.getValue(),
+        }),
+      };
+    },
+    onConfirm: async ({ input, getValues }) => {
+      const values = getValues();
+      if (!values.profileUrl) {
+        pushToast("Вставьте ссылку на профиль SoundCloud", "error");
+        input.focus();
+        return undefined;
+      }
+
+      const previousLabel = el.modalConfirmBtn.textContent;
+      el.modalConfirmBtn.disabled = true;
+      el.modalConfirmBtn.textContent = "Импорт...";
+
+      try {
+        const response = await window.soundcloudAPI.library.importSoundCloudProfile(values);
+        const summary = unwrapResponse(response, "Не удалось импортировать профиль SoundCloud");
+        const firstImportedPlaylistId = summary.playlistIds?.[0] || null;
+        const hasImportedPlaylists = Boolean(
+          Number(summary.importedPlaylists || 0) + Number(summary.updatedPlaylists || 0)
+        );
+
+        await loadLibraryState({
+          preservePlaylistId: firstImportedPlaylistId || state.selectedPlaylist?.id,
+        });
+
+        if (values.importMode === "playlists" || hasImportedPlaylists) {
+          setLibraryTab("playlists");
+          if (firstImportedPlaylistId) {
+            const playlist = state.playlists.find((item) => String(item.id) === String(firstImportedPlaylistId));
+            if (playlist) {
+              await selectPlaylist(playlist);
+            }
+          }
+        } else {
+          setLibraryTab("favorites");
+        }
+
+        const parts = [];
+        if (summary.importedFavorites) {
+          parts.push(`${summary.importedFavorites} ${trackWord(summary.importedFavorites)} в избранное`);
+        }
+        if (summary.importedPlaylists) {
+          parts.push(`${summary.importedPlaylists} новых ${playlistWord(summary.importedPlaylists)}`);
+        }
+        if (summary.updatedPlaylists) {
+          parts.push(`${summary.updatedPlaylists} обновленных ${playlistWord(summary.updatedPlaylists)}`);
+        }
+
+        if (parts.length) {
+          pushToast(`Импортирован профиль «${summary.profileTitle}»: ${parts.join(" • ")}`, "success");
+        } else {
+          pushToast(`Профиль «${summary.profileTitle}» обработан, но открытых лайков и публичных плейлистов не найдено`, "info");
+        }
+
+        return summary;
+      } catch (error) {
+        pushToast(normalizeError(error, "Не удалось импортировать профиль SoundCloud"), "error");
+        return undefined;
+      } finally {
+        el.modalConfirmBtn.disabled = false;
+        el.modalConfirmBtn.textContent = previousLabel;
+      }
+    },
+  });
+}
+
 function setOnboardingOpen(open) {
   state.onboardingOpen = Boolean(open);
   el.onboardingOverlay?.classList.toggle("hidden", !state.onboardingOpen);
   document.body.classList.toggle("onboarding-open", state.onboardingOpen);
+}
+
+async function openSoundCloudImportModal() {
+  return openModal({
+    title: "Импорт из SoundCloud",
+    description: "Вставьте ссылку на профиль и выберите, что нужно перенести в клиент. Локальные плейлисты не перезаписываются.",
+    confirmText: "Импортировать",
+    renderBody: () => {
+      let importMode = "both";
+      let favoritesMode = "append";
+      let busy = false;
+      const importId = typeof crypto?.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `sc-import-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+      const root = document.createElement("div");
+      root.className = "modal-form";
+
+      const urlSection = document.createElement("div");
+      urlSection.className = "modal-form-section";
+
+      const urlLabel = document.createElement("label");
+      urlLabel.className = "modal-form-label";
+      urlLabel.textContent = "Ссылка на профиль";
+
+      const input = document.createElement("input");
+      input.type = "url";
+      input.placeholder = "https://soundcloud.com/username";
+      input.autocomplete = "off";
+      input.spellcheck = false;
+
+      urlSection.appendChild(urlLabel);
+      urlSection.appendChild(input);
+
+      const createOptionSection = ({ title, description, options, initialValue, onChange }) => {
+        let currentValue = initialValue;
+        let disabledByMode = false;
+        const section = document.createElement("section");
+        section.className = "modal-form-section";
+
+        const titleNode = document.createElement("div");
+        titleNode.className = "modal-form-label";
+        titleNode.textContent = title;
+
+        const descriptionNode = document.createElement("p");
+        descriptionNode.className = "modal-form-hint";
+        descriptionNode.textContent = description;
+
+        const grid = document.createElement("div");
+        grid.className = "modal-options-grid";
+
+        const buttons = options.map((option) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "modal-option-card";
+          button.dataset.value = option.value;
+
+          const titleText = document.createElement("strong");
+          titleText.textContent = option.label;
+
+          const subtitleText = document.createElement("span");
+          subtitleText.textContent = option.description;
+
+          button.appendChild(titleText);
+          button.appendChild(subtitleText);
+          button.addEventListener("click", () => {
+            if (button.disabled) return;
+            currentValue = option.value;
+            sync();
+            onChange?.(currentValue);
+          });
+
+          grid.appendChild(button);
+          return button;
+        });
+
+        const sync = () => {
+          buttons.forEach((button) => {
+            button.classList.toggle("selected", button.dataset.value === currentValue);
+            button.disabled = busy || disabledByMode;
+          });
+        };
+
+        section.appendChild(titleNode);
+        section.appendChild(descriptionNode);
+        section.appendChild(grid);
+        sync();
+
+        return {
+          element: section,
+          setDisabled: (disabled, hintText = "") => {
+            disabledByMode = Boolean(disabled);
+            section.classList.toggle("disabled", disabledByMode);
+            descriptionNode.textContent = hintText || description;
+            sync();
+          },
+          getValue: () => currentValue,
+          refreshBusy: () => sync(),
+        };
+      };
+
+      const favoritesModeSection = createOptionSection({
+        title: "Как обработать избранное",
+        description: "Выберите, нужно ли добавить импортированные лайки к текущему избранному или заменить его.",
+        initialValue: favoritesMode,
+        onChange: (value) => {
+          favoritesMode = value;
+        },
+        options: [
+          { value: "append", label: "Добавить к текущему", description: "Импортированные лайки дополнят уже сохраненные треки." },
+          { value: "replace", label: "Перезаписать избранное", description: "В избранном останутся только лайки из выбранного профиля." },
+        ],
+      });
+
+      const importModeSection = createOptionSection({
+        title: "Что импортировать",
+        description: "Можно перенести лайки, публичные плейлисты или сразу оба блока.",
+        initialValue: importMode,
+        onChange: (value) => {
+          importMode = value;
+          const playlistsOnly = value === "playlists";
+          favoritesModeSection.setDisabled(
+            playlistsOnly,
+            playlistsOnly
+              ? "Этот режим нужен только при импорте лайков."
+              : "Выберите, нужно ли добавить импортированные лайки к текущему избранному или заменить его."
+          );
+        },
+        options: [
+          { value: "likes", label: "Только лайки", description: "Импортировать понравившиеся треки в избранное." },
+          { value: "playlists", label: "Только плейлисты", description: "Создать или обновить локальные копии публичных плейлистов." },
+          { value: "both", label: "Лайки и плейлисты", description: "Перенести и избранное, и публичные подборки профиля." },
+        ],
+      });
+
+      const progressSection = document.createElement("section");
+      progressSection.className = "modal-progress hidden";
+
+      const progressHead = document.createElement("div");
+      progressHead.className = "modal-progress-head";
+
+      const progressLabel = document.createElement("strong");
+      progressLabel.textContent = "Подготовка импорта";
+
+      const progressValue = document.createElement("span");
+      progressValue.textContent = "0%";
+
+      progressHead.appendChild(progressLabel);
+      progressHead.appendChild(progressValue);
+
+      const progressBar = document.createElement("div");
+      progressBar.className = "modal-progress-bar";
+
+      const progressFill = document.createElement("span");
+      progressBar.appendChild(progressFill);
+
+      const progressHint = document.createElement("p");
+      progressHint.className = "modal-progress-hint";
+      progressHint.textContent = "После запуска покажем этап импорта и текущий прогресс.";
+
+      progressSection.appendChild(progressHead);
+      progressSection.appendChild(progressBar);
+      progressSection.appendChild(progressHint);
+
+      const note = document.createElement("div");
+      note.className = "modal-note";
+      note.textContent = "Локальные плейлисты не затираются. SoundCloud-плейлисты импортируются отдельно и при повторном импорте обновляются только их копии.";
+
+      const setProgress = (nextProgress, message, detail = "") => {
+        const safeProgress = Math.max(0, Math.min(100, Number(nextProgress || 0)));
+        progressSection.classList.remove("hidden");
+        progressValue.textContent = `${Math.round(safeProgress)}%`;
+        progressFill.style.width = `${safeProgress}%`;
+        progressLabel.textContent = message || "Импортируем данные...";
+        progressHint.textContent = detail || "Этап будет обновляться автоматически по мере загрузки данных.";
+      };
+
+      const setBusy = (nextBusy) => {
+        busy = Boolean(nextBusy);
+        root.classList.toggle("busy", busy);
+        input.disabled = busy;
+        importModeSection.refreshBusy();
+        favoritesModeSection.refreshBusy();
+        el.modalCancelBtn.disabled = busy;
+        el.modalCloseBtn.disabled = busy;
+      };
+
+      const unsubscribeImportStatus = typeof window.soundcloudAPI.onLibraryImportStatus === "function"
+        ? window.soundcloudAPI.onLibraryImportStatus((payload) => {
+          if (!payload || payload.importId !== importId) return;
+          setProgress(
+            payload.progress,
+            payload.message || "Импортируем данные...",
+            payload.stage === "error"
+              ? "Импорт остановлен из-за ошибки."
+              : "Импортируем публичные данные профиля и сохраняем их в библиотеку."
+          );
+        })
+        : () => {};
+
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          el.modalConfirmBtn.click();
+        }
+      });
+
+      root.appendChild(urlSection);
+      root.appendChild(importModeSection.element);
+      root.appendChild(favoritesModeSection.element);
+      root.appendChild(progressSection);
+      root.appendChild(note);
+
+      return {
+        element: root,
+        input,
+        setBusy,
+        setProgress,
+        canClose: () => !busy,
+        onClose: () => unsubscribeImportStatus?.(),
+        getValues: () => ({
+          importId,
+          profileUrl: input.value.trim(),
+          importMode: importModeSection.getValue(),
+          favoritesMode: favoritesModeSection.getValue(),
+        }),
+      };
+    },
+    onConfirm: async ({ input, getValues, setBusy, setProgress }) => {
+      const values = getValues();
+      if (!values.profileUrl) {
+        pushToast("Вставьте ссылку на профиль SoundCloud", "error");
+        input.focus();
+        return undefined;
+      }
+
+      const previousLabel = el.modalConfirmBtn.textContent;
+      setBusy(true);
+      el.modalConfirmBtn.disabled = true;
+      el.modalConfirmBtn.textContent = "Импорт...";
+      setProgress(4, "Запускаем импорт...", "Сейчас начнем проверять профиль и собирать данные.");
+
+      try {
+        const response = await window.soundcloudAPI.library.importSoundCloudProfile(values);
+        const summary = unwrapResponse(response, "Не удалось импортировать профиль SoundCloud");
+        const firstImportedPlaylistId = summary.playlistIds?.[0] || null;
+        const hasImportedPlaylists = Boolean(
+          Number(summary.importedPlaylists || 0) + Number(summary.updatedPlaylists || 0)
+        );
+
+        setProgress(97, "Обновляем библиотеку в клиенте...", "Подхватываем новые данные в интерфейс.");
+        await loadLibraryState({
+          preservePlaylistId: firstImportedPlaylistId || state.selectedPlaylist?.id,
+        });
+
+        if (values.importMode === "playlists" || hasImportedPlaylists) {
+          setLibraryTab("playlists");
+          if (firstImportedPlaylistId) {
+            const playlist = state.playlists.find((item) => String(item.id) === String(firstImportedPlaylistId));
+            if (playlist) {
+              await selectPlaylist(playlist);
+            }
+          }
+        } else {
+          setLibraryTab("favorites");
+        }
+
+        const parts = [];
+        if (summary.importedFavorites) {
+          parts.push(`${summary.importedFavorites} ${trackWord(summary.importedFavorites)} в избранное`);
+        }
+        if (summary.importedPlaylists) {
+          parts.push(`${summary.importedPlaylists} новых ${playlistWord(summary.importedPlaylists)}`);
+        }
+        if (summary.updatedPlaylists) {
+          parts.push(`${summary.updatedPlaylists} обновленных ${playlistWord(summary.updatedPlaylists)}`);
+        }
+
+        if (parts.length) {
+          pushToast(`Импортирован профиль «${summary.profileTitle}»: ${parts.join(" • ")}`, "success");
+        } else {
+          pushToast(`Профиль «${summary.profileTitle}» обработан, но открытых лайков и публичных плейлистов не найдено`, "info");
+        }
+
+        return summary;
+      } catch (error) {
+        setProgress(100, "Импорт не завершен", normalizeError(error, "Не удалось импортировать профиль SoundCloud"));
+        pushToast(normalizeError(error, "Не удалось импортировать профиль SoundCloud"), "error");
+        return undefined;
+      } finally {
+        setBusy(false);
+        el.modalConfirmBtn.disabled = false;
+        el.modalConfirmBtn.textContent = previousLabel;
+      }
+    },
+  });
 }
 
 function dismissOnboarding(options = {}) {
@@ -1521,6 +2386,7 @@ function buildSearchEntitySnapshot() {
   if (state.searchViewMode === "entity" && state.searchEntity) {
     return {
       type: "entity",
+      page: state.page,
       entity: state.searchEntity,
       tab: state.searchEntityTab,
       info: state.searchEntityInfo,
@@ -1529,6 +2395,7 @@ function buildSearchEntitySnapshot() {
 
   return {
     type: "results",
+    page: state.page,
     tab: state.searchTab,
     selectedItem: state.selectedItem,
   };
@@ -1562,6 +2429,10 @@ function closeSearchEntity() {
     state.searchViewMode = "results";
     state.searchEntity = null;
     state.searchEntityInfo = "";
+    const fallbackPage = snapshot?.page || "search";
+    if (fallbackPage !== "search") {
+      setPage(fallbackPage);
+    }
     if (snapshot?.tab) {
       setSearchTab(snapshot.tab);
     }
@@ -1578,6 +2449,9 @@ function closeSearchEntity() {
   state.searchEntityInfo = snapshot.info || "";
   state.searchEntityTab = snapshot.tab || getDefaultSearchEntityTab(snapshot.entity);
   state.selectedItem = snapshot.entity;
+  if (snapshot?.page && snapshot.page !== "search") {
+    setPage(snapshot.page);
+  }
   renderHome();
   renderSearchResults();
   renderLibraryPanels();
@@ -1594,6 +2468,14 @@ function renderSearchWorkspace() {
 
 function searchEntityStats(entity) {
   if (!entity) return [];
+
+  if (entity.kind === "mix-local") {
+    return [
+      { label: "Треков", value: String(entity.tracks?.length || 0) },
+      { label: "Источник", value: "Локальный микс" },
+      { label: "Обновлен", value: homeMixRelativeTime(entity.generatedAt || 0) },
+    ];
+  }
 
   if (entity.kind === "artist") {
     return [
@@ -1642,12 +2524,18 @@ function renderSearchEntity() {
     ? "Слушать треки"
     : entity.kind === "album"
       ? "Слушать альбом"
-      : "Слушать плейлист";
+      : entity.kind === "mix-local"
+        ? "Слушать микс"
+        : "Слушать плейлист";
   el.entityPrimaryBtn.onclick = async () => {
     if (!tracks.length) return;
-    await playTrack(tracks[0], tracks);
+    await playTrack(tracks[0], tracks, { preserveQueueOrder: true });
   };
-  el.entityBrowserBtn.onclick = async () => openInBrowser(entity);
+  el.entityBrowserBtn.classList.toggle("hidden", !entity?.webpage_url);
+  el.entityBrowserBtn.onclick = async () => {
+    if (!entity?.webpage_url) return;
+    await openInBrowser(entity);
+  };
 
   const isArtist = entity.kind === "artist";
   el.entityTabs.classList.toggle("hidden", !isArtist);
@@ -1666,12 +2554,22 @@ function renderSearchEntity() {
   });
 
   if (!isArtist) {
-    el.entityContentTitle.textContent = entity.kind === "album" ? "Треки альбома" : "Треки плейлиста";
+    el.entityContentTitle.textContent = entity.kind === "album"
+      ? "Треки альбома"
+      : entity.kind === "mix-local"
+        ? "Треки микса"
+        : "Треки плейлиста";
     el.entityContentText.textContent = entity.kind === "album"
       ? "Полная раскладка альбома внутри клиента."
-      : "Все треки выбранного плейлиста под рукой.";
+      : entity.kind === "mix-local"
+        ? "Полный список треков локального микса. Можно сразу запускать, лайкать и добавлять в плейлисты."
+        : "Все треки выбранного плейлиста под рукой.";
     renderTrackRows(el.entityContentList, tracks, {
-      emptyText: entity.kind === "album" ? "В этом альбоме пока нет доступных треков." : "В этом плейлисте пока нет доступных треков.",
+      emptyText: entity.kind === "album"
+        ? "В этом альбоме пока нет доступных треков."
+        : entity.kind === "mix-local"
+          ? "В этом миксе пока нет доступных треков."
+          : "В этом плейлисте пока нет доступных треков.",
       queue: tracks,
     });
     return;
@@ -1990,6 +2888,7 @@ function updateVolumeControls() {
 
 function kindLabel(item) {
   if (!item) return "Ничего не выбрано";
+  if (item.kind === "mix-local") return "Локальный микс";
   if (item.kind === "playlist-local") return "Локальный плейлист";
   if (item.kind === "playlist") return "Плейлист";
   if (item.kind === "album") return "Альбом";
@@ -2000,6 +2899,14 @@ function kindLabel(item) {
 function detailMeta(item) {
   if (!item) return "";
   const parts = [];
+  if (item.kind === "mix-local") {
+    parts.push(`${item.tracks?.length || item.track_count || 0} ${trackWord(item.tracks?.length || item.track_count || 0)}`);
+    parts.push("Локальная рекомендация");
+    if (item.generatedAt) {
+      parts.push(`Обновлено ${homeMixRelativeTime(item.generatedAt)}`);
+    }
+    return parts.join(" • ");
+  }
   if (item.kind === "playlist-local") {
     parts.push(`${item.track_count || state.playlistTracks.length || 0} ${trackWord(item.track_count || state.playlistTracks.length || 0)}`);
     parts.push("Локальная коллекция");
@@ -2028,6 +2935,9 @@ function detailMeta(item) {
 function detailText(item) {
   if (!item) {
     return "Выберите трек, плейлист или артиста. Здесь появятся подробности и быстрые действия.";
+  }
+  if (item.kind === "mix-local") {
+    return item.description || "Этот микс собран локально на основе недавних прослушиваний, лайков и содержимого ваших плейлистов.";
   }
   if (item.kind === "playlist-local") {
     return "Локальный плейлист хранится только в вашем клиенте. Можно добавлять в него треки из поиска, избранного и недавно прослушанных.";
@@ -2435,13 +3345,143 @@ function renderSidebar() {
   });
 }
 
+function renderHomeMixes() {
+  if (!el.homeMixesGrid || !el.homeMixesMeta) {
+    return;
+  }
+
+  if (state.homeMixesLoading && !state.homeMixes.length) {
+    el.homeMixesMeta.textContent = "Собираем локальные рекомендации…";
+    el.homeMixesGrid.innerHTML = '<div class="empty-state">Собираем три микса из недавних треков, лайков и локальных плейлистов.</div>';
+    if (el.refreshHomeMixesBtn) {
+      el.refreshHomeMixesBtn.disabled = true;
+    }
+    return;
+  }
+
+  if (!state.homeMixes.length) {
+    el.homeMixesMeta.textContent = "Пока не хватает данных";
+    el.homeMixesGrid.innerHTML = '<div class="empty-state">Послушайте несколько треков, поставьте лайки или наполните локальные плейлисты, и здесь появятся миксы.</div>';
+    if (el.refreshHomeMixesBtn) {
+      el.refreshHomeMixesBtn.disabled = false;
+    }
+    return;
+  }
+
+  el.homeMixesMeta.textContent = state.homeMixesLoading
+    ? "Обновляем локальные миксы…"
+    : `Обновлено ${homeMixRelativeTime(state.homeMixesGeneratedAt)}`;
+
+  el.homeMixesGrid.innerHTML = state.homeMixes.map((mix) => {
+    const artists = sampleArtistsFromTracks(mix.tracks);
+    const previewTracks = mix.tracks.slice(0, HOME_MIX_PREVIEW_LIMIT);
+    return `
+      <article class="mix-card" data-mix-id="${mix.id}" tabindex="0" role="button" aria-label="Открыть ${escapeHtml(mix.title)}">
+        <div class="mix-card-kicker">Локальный поток</div>
+        <div class="mix-card-head">
+          <div>
+            <h4>${escapeHtml(mix.title)}</h4>
+            <p>${escapeHtml(mix.subtitle)}</p>
+          </div>
+          <div class="mix-card-badge">${mix.tracks.length} ${trackWord(mix.tracks.length)}</div>
+        </div>
+        <p class="mix-card-text">${escapeHtml(mix.description)}</p>
+        <div class="mix-card-meta">
+          ${artists.map((artist) => `<span class="mix-chip">${escapeHtml(artist)}</span>`).join("")}
+        </div>
+        <div class="mix-preview-list">
+          ${previewTracks.map((track, index) => `
+            <div class="mix-preview-item">
+              <span class="mix-preview-index">${String(index + 1).padStart(2, "0")}</span>
+              <div class="mix-preview-copy">
+                <strong>${escapeHtml(track.title || "Без названия")}</strong>
+                <span>${escapeHtml(getArtist(track))}</span>
+              </div>
+            </div>
+          `).join("")}
+        </div>
+        <div class="mix-card-actions">
+          <button class="primary-btn" type="button" data-mix-action="play">Слушать микс</button>
+          <button class="secondary-btn" type="button" data-mix-action="queue">Поставить следом</button>
+        </div>
+      </article>
+    `;
+  }).join("");
+
+  if (el.refreshHomeMixesBtn) {
+    el.refreshHomeMixesBtn.disabled = state.homeMixesLoading;
+  }
+}
+
+function toMixEntity(mix) {
+  return {
+    id: mix.id,
+    kind: "mix-local",
+    title: mix.title,
+    uploader: "SoundCloud Desktop",
+    description: mix.description,
+    thumbnail: mix.tracks[0]?.thumbnail || "",
+    tracks: mix.tracks,
+    track_count: mix.tracks.length,
+    generatedAt: mix.generatedAt,
+  };
+}
+
+function openHomeMix(mixId) {
+  const mix = state.homeMixes.find((item) => item.id === mixId);
+  if (!mix?.tracks?.length) {
+    pushToast("Этот микс пока пуст", "info");
+    return;
+  }
+
+  openSearchEntity(toMixEntity(mix), `Локальный микс: ${mix.title}`);
+}
+
+function getHomeMixTracksFlat(limit = 6) {
+  return uniqueByItemId(state.homeMixes.flatMap((mix) => mix.tracks)).slice(0, limit);
+}
+
+function queueHomeMix(mixId) {
+  const mix = state.homeMixes.find((item) => item.id === mixId);
+  if (!mix?.tracks?.length) {
+    pushToast("В этом миксе пока нет треков", "info");
+    return;
+  }
+
+  const additions = uniqueByItemId(mix.tracks);
+  if (!state.currentQueue.length || state.currentQueueIndex < 0) {
+    state.currentQueue = additions;
+    state.currentQueueIndex = 0;
+  } else {
+    const before = state.currentQueue.slice(0, state.currentQueueIndex + 1);
+    const after = state.currentQueue.slice(state.currentQueueIndex + 1);
+    const existingIds = new Set(state.currentQueue.map(getItemId));
+    const uniqueAdditions = additions.filter((track) => !existingIds.has(getItemId(track)));
+    state.currentQueue = [...before, ...uniqueAdditions, ...after];
+  }
+
+  renderHome();
+  renderPlayerState();
+  pushToast(`Микс добавлен в очередь: ${mix.title}`, "success");
+}
+
+async function refreshHomeMixes(options = {}) {
+  await ensureHomeMixes({ force: true });
+  renderHome();
+  if (options.toast !== false) {
+    pushToast("Локальные миксы обновлены", "success");
+  }
+}
+
 function renderHome() {
   syncHomeHeroVisibility();
   renderHotkeyHints();
+  renderHomeMixes();
 
   const recent = recentTracks().slice(0, 6);
   const favorites = favoriteTracks();
-  const mix = [...favorites, ...recentTracks()]
+  const mixHighlights = getHomeMixTracksFlat(6);
+  const mix = (mixHighlights.length ? mixHighlights : [...favorites, ...recentTracks()])
     .filter((item, index, list) => list.findIndex((candidate) => getItemId(candidate) === getItemId(item)) === index)
     .slice(0, 6);
 
@@ -2619,13 +3659,16 @@ async function loadLibraryState({ preservePlaylistId } = {}) {
       state.playlistTracks = [];
     }
 
+    await ensureHomeMixes();
     renderSidebar();
     renderHome();
     renderSearchResults();
     renderLibraryPanels();
     renderDetailPanels();
+    return true;
   } catch (error) {
     pushToast(normalizeError(error, "Не удалось обновить библиотеку"), "error");
+    return false;
   }
 }
 
@@ -3537,9 +4580,43 @@ function bindEventsLegacyUnused() {
     setPage("library");
     setLibraryTab("playlists");
   });
+  el.refreshHomeMixesBtn?.addEventListener("click", () => {
+    refreshHomeMixes().catch((error) => {
+      pushToast(normalizeError(error, "Не удалось обновить локальные миксы"), "error");
+    });
+  });
+  el.homeMixesGrid?.addEventListener("click", async (event) => {
+    const actionNode = event.target.closest("[data-mix-action]");
+    const card = event.target.closest("[data-mix-id]");
+    if (!actionNode || !card) return;
+
+    const mix = state.homeMixes.find((item) => item.id === card.dataset.mixId);
+    if (!mix?.tracks?.length) return;
+
+    const action = actionNode.dataset.mixAction;
+    if (action === "play") {
+      await playTrack(mix.tracks[0], mix.tracks, { preserveQueueOrder: true });
+      pushToast(`Запущен ${mix.title}`, "success");
+      return;
+    }
+
+    if (action === "queue") {
+      queueHomeMix(mix.id);
+    }
+  });
   el.entityBackBtn.addEventListener("click", closeSearchEntity);
   el.refreshRecentBtn.addEventListener("click", () => loadLibraryState({ preservePlaylistId: state.selectedPlaylist?.id }));
-  el.refreshLibraryBtn.addEventListener("click", () => loadLibraryState({ preservePlaylistId: state.selectedPlaylist?.id }));
+  el.refreshLibraryBtn.addEventListener("click", async () => {
+    const ok = await loadLibraryState({ preservePlaylistId: state.selectedPlaylist?.id });
+    if (ok) {
+      pushToast("Библиотека обновлена", "success");
+    }
+  });
+  el.importSoundcloudBtn?.addEventListener("click", () => {
+    openSoundCloudImportModal().catch((error) => {
+      pushToast(normalizeError(error, "Не удалось открыть импорт SoundCloud"), "error");
+    });
+  });
   el.playPlaylistBtn.addEventListener("click", async () => {
     if (!state.playlistTracks.length) {
       pushToast("В плейлисте пока нет треков", "info");
@@ -3758,9 +4835,50 @@ function bindEvents() {
     setPage("library");
     setLibraryTab("playlists");
   });
+  el.refreshHomeMixesBtn?.addEventListener("click", () => {
+    refreshHomeMixes().catch((error) => {
+      pushToast(normalizeError(error, "Не удалось обновить локальные миксы"), "error");
+    });
+  });
+  el.homeMixesGrid?.addEventListener("click", async (event) => {
+    const card = event.target.closest("[data-mix-id]");
+    if (!card) return;
+
+    const mix = state.homeMixes.find((item) => item.id === card.dataset.mixId);
+    if (!mix?.tracks?.length) return;
+
+    const action = event.target.closest("[data-mix-action]")?.dataset.mixAction || "";
+    if (action === "play") {
+      await playTrack(mix.tracks[0], mix.tracks, { preserveQueueOrder: true });
+      pushToast(`Запущен ${mix.title}`, "success");
+      return;
+    }
+
+    if (action === "queue") {
+      queueHomeMix(mix.id);
+      return;
+    }
+
+    openHomeMix(mix.id);
+  });
+  el.homeMixesGrid?.addEventListener("keydown", (event) => {
+    const card = event.target.closest("[data-mix-id]");
+    if (!card) return;
+    if (event.target.closest("[data-mix-action]")) return;
+
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openHomeMix(card.dataset.mixId);
+    }
+  });
   el.entityBackBtn.addEventListener("click", closeSearchEntity);
   el.refreshRecentBtn.addEventListener("click", () => loadLibraryState({ preservePlaylistId: state.selectedPlaylist?.id }));
   el.refreshLibraryBtn.addEventListener("click", () => loadLibraryState({ preservePlaylistId: state.selectedPlaylist?.id }));
+  el.importSoundcloudBtn?.addEventListener("click", () => {
+    openSoundCloudImportModal().catch((error) => {
+      pushToast(normalizeError(error, "Не удалось открыть импорт SoundCloud"), "error");
+    });
+  });
   el.playPlaylistBtn.addEventListener("click", async () => {
     if (!state.playlistTracks.length) {
       pushToast("В плейлисте пока нет треков", "info");

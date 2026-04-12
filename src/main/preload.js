@@ -15,6 +15,12 @@ contextBridge.exposeInMainWorld('soundcloudAPI', {
     ipcRenderer.on('app:navigate', handler);
     return () => ipcRenderer.removeListener('app:navigate', handler);
   },
+  onLibraryImportStatus: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_, payload) => callback(payload);
+    ipcRenderer.on('library:import-status', handler);
+    return () => ipcRenderer.removeListener('library:import-status', handler);
+  },
   getStream: (trackUrl) => ipcRenderer.invoke('sc:get-stream', { trackUrl }),
   preparePlayback: (trackUrl, title) => ipcRenderer.invoke('sc:prepare-playback', { trackUrl, title }),
   downloadTrack: (trackUrl, title) => ipcRenderer.invoke('sc:download-track', { trackUrl, title }),
@@ -31,6 +37,7 @@ contextBridge.exposeInMainWorld('soundcloudAPI', {
     addTrackToPlaylist: (playlistId, track) => ipcRenderer.invoke('library:add-track-to-playlist', { playlistId, track }),
     getPlaylistTracks: (playlistId) => ipcRenderer.invoke('library:get-playlist-tracks', { playlistId }),
     removeTrackFromPlaylist: (playlistId, trackId) => ipcRenderer.invoke('library:remove-track-from-playlist', { playlistId, trackId }),
+    importSoundCloudProfile: (options) => ipcRenderer.invoke('library:import-soundcloud-profile', options),
   },
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', { url }),
 });

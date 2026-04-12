@@ -276,6 +276,51 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('library:import-soundcloud-profile', async (event, options = {}) => {
+    const importId = String(options.importId || '');
+    const sendImportStatus = (payload = {}) => {
+      if (!importId) return;
+      event.sender.send('library:import-status', {
+        importId,
+        ...payload,
+      });
+    };
+
+    try {
+      sendImportStatus({
+        stage: 'start',
+        progress: 4,
+        message: 'Подготавливаем импорт...',
+      });
+
+      const payload = await sc.importProfileLibrary(options.profileUrl, options, sendImportStatus);
+
+      sendImportStatus({
+        stage: 'saving',
+        progress: 92,
+        message: 'Сохраняем импортированные треки и плейлисты...',
+      });
+
+      const result = db.importSoundCloudProfile(payload);
+
+      sendImportStatus({
+        stage: 'done',
+        progress: 100,
+        message: 'Импорт завершен',
+        summary: result,
+      });
+
+      return ok(result);
+    } catch (error) {
+      sendImportStatus({
+        stage: 'error',
+        progress: 100,
+        message: error?.message || 'Не удалось импортировать профиль SoundCloud',
+      });
+      return handleError(error);
+    }
+  });
+
   ipcMain.handle('shell:open-external', async (_, { url }) => {
     try {
       return ok(await shell.openExternal(url));
